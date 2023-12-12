@@ -8,6 +8,7 @@ use iroh_io::AsyncSliceWriter;
 #[derive(Debug)]
 pub struct ProgressSliceWriter2<W, F>(W, F);
 
+#[allow(dead_code)]
 impl<W: AsyncSliceWriter, F: Fn(u64, usize) -> io::Result<()> + 'static>
     ProgressSliceWriter2<W, F>
 {

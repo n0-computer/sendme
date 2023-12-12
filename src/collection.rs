@@ -7,7 +7,7 @@ use bytes::Bytes;
 use iroh_bytes::get::fsm::EndBlobNext;
 use iroh_bytes::get::Stats;
 use iroh_bytes::hashseq::HashSeq;
-use iroh_bytes::store::{MapEntry, bao_tree};
+use iroh_bytes::store::{bao_tree, MapEntry};
 use iroh_bytes::util::TempTag;
 use iroh_bytes::{BlobFormat, Hash};
 use iroh_io::AsyncSliceReaderExt;
@@ -71,6 +71,7 @@ struct CollectionMeta {
     names: Vec<String>,
 }
 
+#[allow(dead_code)]
 impl Collection {
     /// The header for the collection format.
     ///

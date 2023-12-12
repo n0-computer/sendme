@@ -5,7 +5,7 @@ use std::{fmt::Display, str::FromStr};
 
 use anyhow::{ensure, Context, Result};
 use iroh_bytes::{BlobFormat, Hash};
-use iroh_net::{derp::DerpMap, key::SecretKey, NodeAddr};
+use iroh_net::NodeAddr;
 use serde::{Deserialize, Serialize};
 
 /// A token containing everything to get a file from the provider.
@@ -35,6 +35,7 @@ impl FromStr for Ticket {
     }
 }
 
+#[allow(dead_code)]
 impl Ticket {
     /// Creates a new ticket.
     pub fn new(node: NodeAddr, hash: Hash, format: BlobFormat) -> Result<Self> {
@@ -137,6 +138,7 @@ mod tests {
 
     use bao_tree::blake3;
     use iroh_bytes::store::bao_tree;
+    use iroh_net::key::SecretKey;
 
     use super::*;
 

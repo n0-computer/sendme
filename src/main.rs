@@ -1,30 +1,32 @@
 //! Command line arguments.
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use futures::{future, FutureExt, StreamExt};
+use console::style;
+use futures::{future, FutureExt, Stream, StreamExt};
+use indicatif::{
+    style, HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget,
+    ProgressState, ProgressStyle,
+};
 use iroh_bytes::{
-    provider::{handle_connection, EventSender, RequestAuthorizationHandler},
-    store::{ImportMode, Store, ExportMode},
+    provider::{handle_connection, DownloadProgress, EventSender, RequestAuthorizationHandler},
+    store::{ExportMode, ImportMode},
     BlobFormat, HashAndFormat, TempTag,
 };
+use iroh_bytes_util::get_hash_seq_and_sizes;
 use iroh_net::{key::SecretKey, MagicEndpoint};
-use walkdir::WalkDir;
 use std::{
-    any, io,
-    net::{SocketAddr, ToSocketAddrs},
-    path::{PathBuf, Path, Component},
+    path::{Component, Path, PathBuf},
     str::FromStr,
     sync::Arc,
 };
-use tokio::{
-    io::{AsyncRead, AsyncWrite, AsyncWriteExt},
-    select,
-};
-use tokio_util::sync::CancellationToken;
+use walkdir::WalkDir;
 mod sendme_ticket;
 use sendme_ticket::Ticket;
+
+use crate::collection::Collection;
 mod collection;
 mod get;
+mod iroh_bytes_util;
 mod progress;
 /// Send a file or directory between two machines, using blake3 verified streaming.
 ///
@@ -67,7 +69,7 @@ pub struct ProvideArgs {
 #[derive(Parser, Debug)]
 pub struct GetArgs {
     /// The ticket to use to connect to the provider.
-    pub ticket: String,
+    pub ticket: sendme_ticket::Ticket,
 
     /// The port to use for the magicsocket. Random by default.
     #[clap(long, default_value_t = 0)]
@@ -104,18 +106,20 @@ impl EventSender for LogEvents {
 impl RequestAuthorizationHandler for NoAuth {
     fn authorize(
         &self,
-        token: Option<iroh_bytes::protocol::RequestToken>,
-        request: &iroh_bytes::protocol::Request,
+        _token: Option<iroh_bytes::protocol::RequestToken>,
+        _request: &iroh_bytes::protocol::Request,
     ) -> futures::future::BoxFuture<'static, anyhow::Result<()>> {
         future::ok(()).boxed()
     }
 }
 
 fn validate_path_component(component: &str) -> anyhow::Result<()> {
-    anyhow::ensure!(!component.contains('/'), "path components must not contain the only correct path separator, /");
+    anyhow::ensure!(
+        !component.contains('/'),
+        "path components must not contain the only correct path separator, /"
+    );
     Ok(())
 }
-
 
 /// This function converts an already canonicalized path to a string.
 ///
@@ -162,12 +166,11 @@ pub fn canonicalized_path_to_string(
     Ok(path_str)
 }
 
-
 /// Import from a file or directory into the database.
-/// 
+///
 /// The returned tag always refers to a collection. If the input is a file, this
 /// is a collection with a single blob, named like the file.
-/// 
+///
 /// If the input is a directory, the collection contains all the files in the
 /// directory.
 async fn import(
@@ -176,61 +179,55 @@ async fn import(
 ) -> anyhow::Result<(TempTag, u64)> {
     let path = path.canonicalize()?;
     anyhow::ensure!(path.exists(), "path {} does not exist", path.display());
-    let prefix = path
-        .components()
-        .last()
-        .context("path is empty")?
-        .as_os_str()
-        .to_str()
-        .context("not valid utf8")?
-        .to_string();
-    validate_path_component(&prefix)?;
     let progress = iroh_bytes::util::progress::IgnoreProgressSender::default();
     let root = path.parent().context("context get parent")?;
-    // walkdir also works for files
+    // walkdir also works for files, so we don't need to special case them
     let files = WalkDir::new(path.clone()).into_iter();
-    let data_sources = files
-    .map(|entry| {
-        let entry = entry?;
-        if !entry.file_type().is_file() {
-            // Skip symlinks. Directories are handled by WalkDir.
-            return Ok(None);
-        }
-        let path = entry.into_path();
-        let relative = path.strip_prefix(&root)?;
-        let name = canonicalized_path_to_string(relative, true)?;
-        anyhow::Ok(Some((name, path)))
-    })
-    .filter_map(Result::transpose);
-    let data_sources: Vec<anyhow::Result<(String, PathBuf)>> = data_sources.collect::<Vec<_>>();
-    let data_sources = data_sources.into_iter().collect::<anyhow::Result<Vec<_>>>()?;
-    let streams = futures::stream::iter(data_sources)
+    // flatten the directory structure into a list of (name, path) pairs.
+    // ignore symlinks.
+    let data_sources: Vec<(String, PathBuf)> = files
+        .map(|entry| {
+            let entry = entry?;
+            if !entry.file_type().is_file() {
+                // Skip symlinks. Directories are handled by WalkDir.
+                return Ok(None);
+            }
+            let path = entry.into_path();
+            let relative = path.strip_prefix(&root)?;
+            let name = canonicalized_path_to_string(relative, true)?;
+            anyhow::Ok(Some((name, path)))
+        })
+        .filter_map(Result::transpose)
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    // import all the files, using num_cpus workers, return names and temp tags
+    let names_and_tags = futures::stream::iter(data_sources)
         .map(|(name, path)| {
             let db = db.clone();
             let progress = progress.clone();
             async move {
                 let (temp_tag, file_size) = db
-                    .import_file(
-                        path,
-                        ImportMode::TryReference,
-                        BlobFormat::Raw,
-                        progress,
-                    )
+                    .import_file(path, ImportMode::TryReference, BlobFormat::Raw, progress)
                     .await?;
                 anyhow::Ok((name, temp_tag, file_size))
             }
         })
-        .buffer_unordered(4)
-        .collect::<Vec<_>>().await;
-    let streams = streams.into_iter().collect::<anyhow::Result<Vec<_>>>()?;
+        .buffer_unordered(num_cpus::get())
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<anyhow::Result<Vec<_>>>()?;
     // total size of all files
-    let size = streams.iter().map(|(_, _, size)| *size).sum::<u64>();
-    // get names and tags
-    let (names, tags) = streams.into_iter().map(|(name, tag, _)| (name, tag)).unzip::<_, _, Vec<_>, Vec<_>>();
-    // make a collection
-    let hashes = tags.iter().map(|tag| *tag.hash()).collect::<Vec<_>>();
-    let collection = crate::collection::Collection::from_iter(names.into_iter().zip(hashes));
+    let size = names_and_tags.iter().map(|(_, _, size)| *size).sum::<u64>();
+    // collect the (name, hash) tuples into a collection
+    // we must also keep the tags around so the data does not get gced.
+    let (collection, tags) = names_and_tags
+        .into_iter()
+        .map(|(name, tag, _)| ((name, *tag.hash()), tag))
+        .unzip::<_, _, Collection, Vec<_>>();
     let temp_tag = collection.store(&db).await?;
+    // now that the collection is stored, we can drop the tags
+    // data is protected by the collection
+    drop(tags);
     Ok((temp_tag, size))
 }
 
@@ -249,7 +246,8 @@ async fn export(db: impl iroh_bytes::store::Store, root: HashAndFormat) -> anyho
     let root = std::env::current_dir()?;
     for (name, hash) in collection.iter() {
         let target = get_export_path(&root, name)?;
-        db.export(*hash, target, ExportMode::TryReference, |x| Ok(())).await?;
+        db.export(*hash, target, ExportMode::TryReference, |_position| Ok(()))
+            .await?;
     }
     Ok(())
 }
@@ -308,6 +306,100 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn make_overall_progress() -> ProgressBar {
+    let pb = ProgressBar::hidden();
+    pb.enable_steady_tick(std::time::Duration::from_millis(100));
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos}/{len}",
+        )
+        .unwrap()
+        .progress_chars("#>-"),
+    );
+    pb
+}
+
+fn make_individual_progress() -> ProgressBar {
+    let pb = ProgressBar::hidden();
+    pb.enable_steady_tick(std::time::Duration::from_millis(100));
+    pb.set_style(
+        ProgressStyle::with_template("{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+            .unwrap()
+            .with_key(
+                "eta",
+                |state: &ProgressState, w: &mut dyn std::fmt::Write| {
+                    write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
+                },
+            )
+            .progress_chars("#>-"),
+    );
+    pb
+}
+
+pub async fn show_download_progress(
+    mut stream: impl Stream<Item = DownloadProgress> + Unpin,
+) -> anyhow::Result<()> {
+    let mp = MultiProgress::new();
+    mp.set_draw_target(ProgressDrawTarget::stderr());
+    let op = mp.add(make_overall_progress());
+    let ip = mp.add(make_individual_progress());
+    op.set_message(format!("{} Connecting ...\n", style("[1/3]").bold().dim()));
+    let mut seq = false;
+    while let Some(x) = stream.next().await {
+        match x {
+            DownloadProgress::Connected => {
+                op.set_message(format!("{} Requesting ...\n", style("[2/3]").bold().dim()));
+            }
+            DownloadProgress::FoundHashSeq { children, .. } => {
+                op.set_message(format!(
+                    "{} Downloading {} blob(s)\n",
+                    style("[3/3]").bold().dim(),
+                    children + 1,
+                ));
+                op.set_length(children + 1);
+                op.reset();
+                seq = true;
+            }
+            DownloadProgress::Found { size, child, .. } => {
+                if seq {
+                    op.set_position(child);
+                } else {
+                    op.finish_and_clear();
+                }
+                ip.set_length(size);
+                ip.reset();
+            }
+            DownloadProgress::Progress { offset, .. } => {
+                ip.set_position(offset);
+            }
+            DownloadProgress::Done { .. } => {
+                ip.finish_and_clear();
+            }
+            DownloadProgress::NetworkDone {
+                bytes_read,
+                elapsed,
+                ..
+            } => {
+                op.finish_and_clear();
+                eprintln!(
+                    "Transferred {} in {}, {}/s",
+                    HumanBytes(bytes_read),
+                    HumanDuration(elapsed),
+                    HumanBytes((bytes_read as f64 / elapsed.as_secs_f64()) as u64)
+                );
+            }
+            DownloadProgress::AllDone => {
+                break;
+            }
+            DownloadProgress::Abort(e) => {
+                anyhow::bail!("download aborted: {:?}", e);
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 async fn get(args: GetArgs) -> anyhow::Result<()> {
     let secret_key = get_or_create_secret()?;
     let endpoint = MagicEndpoint::builder()
@@ -324,14 +416,28 @@ async fn get(args: GetArgs) -> anyhow::Result<()> {
         &rt,
     )
     .await?;
-    let ticket = sendme_ticket::Ticket::from_str(&args.ticket)?;
+    let mp = MultiProgress::new();
+    let ticket = args.ticket;
     let addr = ticket.node_addr().clone();
+    let connect_progress = mp.add(ProgressBar::hidden());
+    connect_progress.set_draw_target(ProgressDrawTarget::stderr());
+    connect_progress.set_message(format!("connecting to {}", addr.node_id));
     let connection = endpoint.connect(addr, &iroh_bytes::protocol::ALPN).await?;
     let hash_and_format = HashAndFormat {
         hash: ticket.hash(),
         format: ticket.format(),
     };
-    let progress = iroh_bytes::util::progress::IgnoreProgressSender::default();
+    connect_progress.finish_and_clear();
+    let (send, recv) = flume::bounded(32);
+    let progress = iroh_bytes::util::progress::FlumeProgressSender::new(send);
+    let (_hash_seq, sizes) =
+        get_hash_seq_and_sizes(&connection, &hash_and_format.hash, 1024 * 1024 * 32).await?;
+    eprintln!(
+        "getting {} files, {} bytes",
+        sizes.len(),
+        sizes.iter().sum::<u64>()
+    );
+    let task = tokio::spawn(show_download_progress(recv.into_stream()));
     get::get(&db, connection, &hash_and_format, progress).await?;
     export(db, hash_and_format).await?;
     Ok(())

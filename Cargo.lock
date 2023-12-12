@@ -3079,6 +3079,7 @@ dependencies = [
  "duct",
  "flume",
  "futures",
+ "hex",
  "indicatif",
  "iroh-bytes",
  "iroh-io",

@@ -13,6 +13,7 @@ use iroh_bytes::{
 };
 use iroh_bytes_util::get_hash_seq_and_sizes;
 use iroh_net::{key::SecretKey, MagicEndpoint};
+use rand::Rng;
 use std::{
     collections::BTreeMap,
     path::{Component, Path, PathBuf},
@@ -319,7 +320,9 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
         .secret_key(secret_key)
         .bind(args.magic_port);
     // use a flat store - todo: use a partial in mem store instead
-    let iroh_data_dir = std::env::current_dir()?.join(".sendme-provide");
+    let suffix = rand::thread_rng().gen::<[u8; 16]>();
+    let iroh_data_dir =
+        std::env::current_dir()?.join(format!(".sendme-provide-{}", hex::encode(suffix)));
     if iroh_data_dir.exists() {
         println!("can not share twice from the same directory");
         std::process::exit(1);

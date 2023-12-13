@@ -250,7 +250,7 @@ async fn import(
                 return Ok(None);
             }
             let path = entry.into_path();
-            let relative = path.strip_prefix(&root)?;
+            let relative = path.strip_prefix(root)?;
             let name = canonicalized_path_to_string(relative, true)?;
             anyhow::Ok(Some((name, path)))
         })
@@ -294,7 +294,7 @@ async fn import(
 }
 
 fn get_export_path(root: &Path, name: &str) -> anyhow::Result<PathBuf> {
-    let parts = name.split("/");
+    let parts = name.split('/');
     let mut path = root.to_path_buf();
     for part in parts {
         validate_path_component(part)?;

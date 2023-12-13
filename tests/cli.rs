@@ -1,13 +1,7 @@
-use anyhow::Context;
-use rand::Rng;
-
 use std::{
-    io::{self, Read, Write},
-    net::{TcpListener, TcpStream},
+    io::{self, Read},
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Arc, Barrier},
-    time::Duration,
 };
 #[path = "../src/sendme_ticket.rs"]
 mod sendme_ticket;
@@ -41,14 +35,14 @@ fn read_ascii_lines(mut n: usize, reader: &mut impl Read) -> io::Result<Vec<u8>>
     Ok(res)
 }
 
-fn wait2() -> Arc<Barrier> {
-    Arc::new(Barrier::new(2))
-}
+// fn wait2() -> Arc<Barrier> {
+//     Arc::new(Barrier::new(2))
+// }
 
-/// generate a random, non privileged port
-fn random_port() -> u16 {
-    rand::thread_rng().gen_range(10000u16..60000)
-}
+// /// generate a random, non privileged port
+// fn random_port() -> u16 {
+//     rand::thread_rng().gen_range(10000u16..60000)
+// }
 
 #[test]
 fn provide_get_file() {

@@ -18,3 +18,34 @@ Sendme works with 256 bit node ids and therefore is somewhat location transparen
 ```
 cargo install sendme
 ```
+
+# Usage
+
+## Send side
+
+```
+sendme provide <file or directory>
+```
+
+This will create a temporary iroh node that serves the content in the given file or directory.
+It will output a ticket that can be used to get the data.
+
+This currently will create a temporary directory in the current directory. In the future this
+won't be needed anymore.
+
+The provider will run until it is terminated using Control-C. On termination it will delete
+the temporary directory.
+
+### Receive side
+
+```
+sendme get <ticket>
+```
+
+This will download the data and create a file or directory named like the source
+in the **current directory**.
+
+It will create a temporary directory in the current directory, download the data (single
+file or files), and only then move these files to the target directory.
+
+On completion it will delete the temp directory.

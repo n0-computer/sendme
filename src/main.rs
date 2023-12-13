@@ -350,6 +350,15 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
     let path = args.path;
     let (temp_tag, size) = import(path.clone(), db.clone()).await?;
     let hash = *temp_tag.hash();
+    // wait for the endpoint to be ready
+    let endpoint = endpoint_fut.await?;
+    // wait for the endpoint to figure out its address before making a ticket
+    while endpoint.my_derp().is_none() {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    // make a ticket
+    let addr = endpoint.my_addr().await?;
+    let ticket = Ticket::new(addr, hash, BlobFormat::HashSeq)?;
     if path.is_file() {
         println!("imported file {}, {}", path.display(), HumanBytes(size));
     } else {
@@ -359,15 +368,6 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
             HumanBytes(size)
         );
     }
-
-    let endpoint = endpoint_fut.await?;
-    // wait for the endpoint to figure out its address before making a ticket
-    while endpoint.my_derp().is_none() {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-    // make a ticket
-    let addr = endpoint.my_addr().await?;
-    let ticket = Ticket::new(addr, hash, BlobFormat::HashSeq)?;
     println!("to get this data, use");
     println!("sendme get {}", ticket);
     loop {

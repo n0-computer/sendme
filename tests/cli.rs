@@ -1,3 +1,4 @@
+use anyhow::Context;
 use rand::Rng;
 
 use std::{
@@ -7,6 +8,8 @@ use std::{
     sync::{Arc, Barrier},
     time::Duration,
 };
+#[path = "../src/sendme_ticket.rs"]
+mod sendme_ticket;
 
 // binary path
 fn sendme_bin() -> &'static str {
@@ -44,6 +47,40 @@ fn wait2() -> Arc<Barrier> {
 /// generate a random, non privileged port
 fn random_port() -> u16 {
     rand::thread_rng().gen_range(10000u16..60000)
+}
+
+#[test]
+fn provide_get_file() {
+    let name = "somefile.bin";
+    let data = vec![0u8; 100];
+    // create src and tgt dir, and src file
+    let src_dir = tempfile::tempdir().unwrap();
+    let tgt_dir = tempfile::tempdir().unwrap();
+    let src_file = src_dir.path().join(name);
+    std::fs::write(&src_file, &data).unwrap();
+    let mut provide = duct::cmd(
+        sendme_bin(),
+        ["provide", src_file.as_os_str().to_str().unwrap()],
+    )
+    .dir(src_dir.path())
+    .env_remove("RUST_LOG") // disable tracing
+    .stderr_to_stdout()
+    .reader()
+    .unwrap();
+    let output = read_ascii_lines(4, &mut provide).unwrap();
+    let output = String::from_utf8(output).unwrap();
+    let ticket = output.split_ascii_whitespace().last().unwrap();
+    let ticket = sendme_ticket::Ticket::from_str(ticket).unwrap();
+    let get = duct::cmd(sendme_bin(), ["get", &ticket.to_string()])
+        .dir(tgt_dir.path())
+        .env_remove("RUST_LOG") // disable tracing
+        .stderr_to_stdout()
+        .run()
+        .unwrap();
+    assert!(get.status.success());
+    let tgt_file = tgt_dir.path().join(name);
+    let tgt_data = std::fs::read(&tgt_file).unwrap();
+    assert_eq!(tgt_data, data);
 }
 
 // /// Tests the basic functionality of the connect and listen pair

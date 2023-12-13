@@ -215,7 +215,9 @@ pub async fn show_ingest_progress(
                     pb.finish_and_clear();
                 }
             }
-            ImportProgress::CopyProgress { id, offset } => {}
+            ImportProgress::CopyProgress { .. } => {
+                // we are not copying anything
+            }
         }
     }
     op.finish_and_clear();
@@ -327,6 +329,14 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
         println!("can not share twice from the same directory");
         std::process::exit(1);
     }
+    let iroh_data_dir_2 = iroh_data_dir.clone();
+    let _control_c = tokio::spawn(async move {
+        tokio::signal::ctrl_c().await?;
+        std::fs::remove_dir_all(iroh_data_dir_2)?;
+        std::process::exit(1);
+        #[allow(unreachable_code)]
+        anyhow::Ok(())
+    });
     std::fs::create_dir_all(&iroh_data_dir)?;
     let rt = iroh_bytes::util::runtime::Handle::from_current(1)?;
     let db = iroh_bytes::store::flat::Store::load(
@@ -340,7 +350,15 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
     let path = args.path;
     let (temp_tag, size) = import(path.clone(), db.clone()).await?;
     let hash = *temp_tag.hash();
-    println!("imported file {}, {}", path.display(), HumanBytes(size));
+    if path.is_file() {
+        println!("imported file {}, {}", path.display(), HumanBytes(size));
+    } else {
+        println!(
+            "imported directory {}, {} total",
+            path.display(),
+            HumanBytes(size)
+        );
+    }
 
     let endpoint = endpoint_fut.await?;
     // wait for the endpoint to figure out its address before making a ticket
@@ -350,9 +368,8 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
     // make a ticket
     let addr = endpoint.my_addr().await?;
     let ticket = Ticket::new(addr, hash, BlobFormat::HashSeq)?;
-    println!("use");
+    println!("to get this data, use");
     println!("sendme get {}", ticket);
-    println!("to get this data");
     loop {
         let Some(connecting) = endpoint.accept().await else {
             tracing::info!("no more incoming connections, exiting");
@@ -373,7 +390,7 @@ fn make_download_progress() -> ProgressBar {
     pb.enable_steady_tick(std::time::Duration::from_millis(100));
     pb.set_style(
         ProgressStyle::with_template(
-            "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos}/{len}",
+            "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} {binary_bytes_per_sec}",
         )
         .unwrap()
         .progress_chars("#>-"),

@@ -74,7 +74,7 @@ fn provide_get_file() {
         .unwrap();
     assert!(get.status.success());
     let tgt_file = tgt_dir.path().join(name);
-    let tgt_data = std::fs::read(&tgt_file).unwrap();
+    let tgt_data = std::fs::read(tgt_file).unwrap();
     assert_eq!(tgt_data, data);
 }
 

@@ -7,18 +7,22 @@ use indicatif::{
     HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
 };
 use iroh_bytes::{
-    provider::{handle_connection, DownloadProgress, EventSender, RequestAuthorizationHandler},
+    provider::{
+        self, handle_connection, DownloadProgress, EventSender, RequestAuthorizationHandler,
+    },
     store::{ExportMode, ImportMode, ImportProgress},
-    BlobFormat, HashAndFormat, TempTag,
+    BlobFormat, Hash, HashAndFormat, TempTag,
 };
 use iroh_bytes_util::get_hash_seq_and_sizes;
 use iroh_net::{key::SecretKey, MagicEndpoint};
 use rand::Rng;
 use std::{
     collections::BTreeMap,
+    fmt::{Display, Formatter},
     path::{Component, Path, PathBuf},
     str::FromStr,
     sync::Arc,
+    time::Duration,
 };
 use walkdir::WalkDir;
 mod sendme_ticket;
@@ -42,6 +46,41 @@ pub struct Args {
     pub command: Commands,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    #[default]
+    Hex,
+    Cid,
+}
+
+impl FromStr for Format {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "hex" => Ok(Format::Hex),
+            "cid" => Ok(Format::Cid),
+            _ => Err(anyhow::anyhow!("invalid format")),
+        }
+    }
+}
+
+impl Display for Format {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Format::Hex => write!(f, "hex"),
+            Format::Cid => write!(f, "cid"),
+        }
+    }
+}
+
+fn print_hash(hash: &Hash, format: Format) -> String {
+    match format {
+        Format::Hex => hash.to_hex().to_string(),
+        Format::Cid => hash.to_string(),
+    }
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Provide a file or directory.
@@ -52,6 +91,21 @@ pub enum Commands {
 }
 
 #[derive(Parser, Debug)]
+pub struct CommonArgs {
+    /// The port for the magic socket to listen on.
+    ///
+    /// Defauls to a random free port, but it can be useful to specify a fixed
+    /// port, e.g. to configure a firewall rule.
+    #[clap(long, default_value_t = 0)]
+    pub magic_port: u16,
+
+    #[clap(long, default_value_t = Format::Hex)]
+    pub format: Format,
+
+    #[clap(short = 'v', long, action = clap::ArgAction::Count)]
+    pub verbose: u8,
+}
+#[derive(Parser, Debug)]
 pub struct ProvideArgs {
     /// Path to the file or directory to provide.
     ///
@@ -59,12 +113,8 @@ pub struct ProvideArgs {
     /// being shared.
     pub path: PathBuf,
 
-    /// The port for the magic socket to listen on.
-    ///
-    /// Defauls to a random free port, but it can be useful to specify a fixed
-    /// port, e.g. to configure a firewall rule.
-    #[clap(long, default_value_t = 0)]
-    pub magic_port: u16,
+    #[clap(flatten)]
+    pub common: CommonArgs,
 }
 
 #[derive(Parser, Debug)]
@@ -72,9 +122,8 @@ pub struct GetArgs {
     /// The ticket to use to connect to the provider.
     pub ticket: sendme_ticket::Ticket,
 
-    /// The port to use for the magicsocket. Random by default.
-    #[clap(long, default_value_t = 0)]
-    pub magic_port: u16,
+    #[clap(flatten)]
+    pub common: CommonArgs,
 }
 
 /// Get the secret key or generate a new one.
@@ -93,16 +142,6 @@ fn get_or_create_secret() -> anyhow::Result<SecretKey> {
 
 #[derive(Debug)]
 struct NoAuth;
-
-#[derive(Debug, Clone)]
-struct LogEvents;
-
-impl EventSender for LogEvents {
-    fn send(&self, event: iroh_bytes::provider::Event) -> futures::prelude::future::BoxFuture<()> {
-        tracing::info!("event: {:?}", event);
-        future::ready(()).boxed()
-    }
-}
 
 impl RequestAuthorizationHandler for NoAuth {
     fn authorize(
@@ -198,8 +237,8 @@ pub async fn show_ingest_progress(
                 let name = names.get(&id).cloned().unwrap_or_default();
                 let pb = mp.add(ProgressBar::hidden());
                 pb.set_style(ProgressStyle::with_template(
-                    "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos}/{len}",
-                )?);
+                    "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}",
+                )?.progress_chars("#>-"));
                 pb.set_message(format!("{} {}", style("[2/2]").bold().dim(), name));
                 pb.set_length(size);
                 pbs.insert(id, pb);
@@ -234,7 +273,7 @@ pub async fn show_ingest_progress(
 async fn import(
     path: PathBuf,
     db: impl iroh_bytes::store::Store,
-) -> anyhow::Result<(TempTag, u64)> {
+) -> anyhow::Result<(TempTag, u64, Collection)> {
     let path = path.canonicalize()?;
     anyhow::ensure!(path.exists(), "path {} does not exist", path.display());
     let root = path.parent().context("context get parent")?;
@@ -285,12 +324,12 @@ async fn import(
         .into_iter()
         .map(|(name, tag, _)| ((name, *tag.hash()), tag))
         .unzip::<_, _, Collection, Vec<_>>();
-    let temp_tag = collection.store(&db).await?;
+    let temp_tag = collection.clone().store(&db).await?;
     // now that the collection is stored, we can drop the tags
     // data is protected by the collection
     drop(tags);
     show_progress.await??;
-    Ok((temp_tag, size))
+    Ok((temp_tag, size, collection))
 }
 
 fn get_export_path(root: &Path, name: &str) -> anyhow::Result<PathBuf> {
@@ -314,13 +353,96 @@ async fn export(db: impl iroh_bytes::store::Store, root: HashAndFormat) -> anyho
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+struct ProvideStatus {
+    /// the multiprogress bar
+    mp: MultiProgress,
+}
+
+impl ProvideStatus {
+    fn new() -> Self {
+        let mp = MultiProgress::new();
+        mp.set_draw_target(ProgressDrawTarget::stderr());
+        Self { mp }
+    }
+
+    fn new_client(&self) -> ClientStatus {
+        let current = self.mp.add(ProgressBar::hidden());
+        current.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} [{elapsed_precise}] {msg}")
+                .unwrap(),
+        );
+        current.enable_steady_tick(Duration::from_millis(100));
+        current.set_message("waiting for requests");
+        ClientStatus {
+            current: current.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ClientStatus {
+    current: Arc<ProgressBar>,
+}
+
+impl Drop for ClientStatus {
+    fn drop(&mut self) {
+        if Arc::strong_count(&self.current) == 1 {
+            self.current.finish_and_clear();
+        }
+    }
+}
+
+impl EventSender for ClientStatus {
+    fn send(&self, event: iroh_bytes::provider::Event) -> futures::prelude::future::BoxFuture<()> {
+        tracing::info!("{:?}", event);
+        let msg = match event {
+            provider::Event::ClientConnected { connection_id } => {
+                Some(format!("{} got connection", connection_id))
+            }
+            provider::Event::TransferBlobCompleted {
+                connection_id,
+                hash,
+                index,
+                size,
+                ..
+            } => Some(format!(
+                "{} transfer blob completed {} {} {}",
+                connection_id,
+                hash,
+                index,
+                HumanBytes(size)
+            )),
+            provider::Event::TransferCompleted {
+                connection_id,
+                stats,
+                ..
+            } => Some(format!(
+                "{} transfer completed {} {}",
+                connection_id,
+                stats.send.write_bytes.size,
+                HumanDuration(stats.send.write_bytes.stats.duration)
+            )),
+            provider::Event::TransferAborted { connection_id, .. } => {
+                Some(format!("{} transfer completed", connection_id))
+            }
+            _ => None,
+        };
+        if let Some(msg) = msg {
+            self.current.set_message(msg);
+        }
+        future::ready(()).boxed()
+    }
+}
+
 async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
     let secret_key = get_or_create_secret()?;
     // create a magicsocket endpoint
     let endpoint_fut = MagicEndpoint::builder()
         .alpns(vec![iroh_bytes::protocol::ALPN.to_vec()])
         .secret_key(secret_key)
-        .bind(args.magic_port);
+        .bind(args.common.magic_port);
     // use a flat store - todo: use a partial in mem store instead
     let suffix = rand::thread_rng().gen::<[u8; 16]>();
     let iroh_data_dir =
@@ -348,7 +470,7 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
     .await?;
     let auth = Arc::new(NoAuth);
     let path = args.path;
-    let (temp_tag, size) = import(path.clone(), db.clone()).await?;
+    let (temp_tag, size, collection) = import(path.clone(), db.clone()).await?;
     let hash = *temp_tag.hash();
     // wait for the endpoint to be ready
     let endpoint = endpoint_fut.await?;
@@ -359,17 +481,22 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
     // make a ticket
     let addr = endpoint.my_addr().await?;
     let ticket = Ticket::new(addr, hash, BlobFormat::HashSeq)?;
-    if path.is_file() {
-        println!("imported file {}, {}", path.display(), HumanBytes(size));
-    } else {
-        println!(
-            "imported directory {}, {} total",
-            path.display(),
-            HumanBytes(size)
-        );
+    let entry_type = if path.is_file() { "file" } else { "directory" };
+    println!(
+        "imported {} {}, {}, hash {}",
+        entry_type,
+        path.display(),
+        HumanBytes(size),
+        print_hash(&hash, args.common.format)
+    );
+    if args.common.verbose > 0 {
+        for (name, hash) in collection.iter() {
+            println!("    {} {name}", print_hash(hash, args.common.format));
+        }
     }
     println!("to get this data, use");
     println!("sendme get {}", ticket);
+    let ps = ProvideStatus::new();
     loop {
         let Some(connecting) = endpoint.accept().await else {
             tracing::info!("no more incoming connections, exiting");
@@ -377,8 +504,9 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
         };
         let db = db.clone();
         let rt = rt.clone();
+        let ps = ps.clone();
         let auth = auth.clone();
-        tokio::spawn(handle_connection(connecting, db, LogEvents, auth, rt));
+        tokio::spawn(handle_connection(connecting, db, ps.new_client(), auth, rt));
     }
     drop(temp_tag);
     std::fs::remove_dir_all(iroh_data_dir)?;
@@ -461,7 +589,7 @@ async fn get(args: GetArgs) -> anyhow::Result<()> {
     let endpoint = MagicEndpoint::builder()
         .alpns(vec![])
         .secret_key(secret_key)
-        .bind(args.magic_port)
+        .bind(args.common.magic_port)
         .await?;
     let iroh_data_dir = std::env::current_dir()?.join(".sendme-get");
     let rt = iroh_bytes::util::runtime::Handle::from_current(1)?;
@@ -480,7 +608,7 @@ async fn get(args: GetArgs) -> anyhow::Result<()> {
     connect_progress.set_message(format!("connecting to {}", addr.node_id));
     let connection = endpoint.connect(addr, &iroh_bytes::protocol::ALPN).await?;
     let hash_and_format = HashAndFormat {
-        hash: ticket.hash(),
+        hash: *ticket.hash(),
         format: ticket.format(),
     };
     connect_progress.finish_and_clear();

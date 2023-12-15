@@ -44,8 +44,8 @@ impl Ticket {
     }
 
     /// The hash of the item this ticket can retrieve.
-    pub fn hash(&self) -> Hash {
-        self.hash
+    pub fn hash(&self) -> &Hash {
+        &self.hash
     }
 
     /// The [`NodeAddr`] of the provider for this ticket.

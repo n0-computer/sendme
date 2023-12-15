@@ -1,3 +1,4 @@
+/// Utilities for iroh_bytes, should live in iroh-bytes
 use std::sync::Arc;
 
 use bytes::Bytes;

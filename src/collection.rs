@@ -1,4 +1,4 @@
-//! The collection type used by iroh
+//! Should live in iroh-bytes under a feature flag
 use std::collections::BTreeMap;
 
 use anyhow::Context;

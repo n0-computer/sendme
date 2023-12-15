@@ -7,7 +7,7 @@ keywords = ["scp", "sftp", "network", "p2p", "holepunching"]
 categories = ["network-programming"]
 license = "Apache-2.0/MIT"
 repository = "https://github.com/n0-computer/dumb-pipe"
-description = "A cli tool to pipe data over the network, with NAT hole punching"
+description = "A cli tool to send directories over the network, with NAT hole punching"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

@@ -585,13 +585,16 @@ pub async fn show_download_progress(
 }
 
 async fn get(args: GetArgs) -> anyhow::Result<()> {
+    let ticket = args.ticket;
+    let addr = ticket.node_addr().clone();
     let secret_key = get_or_create_secret()?;
     let endpoint = MagicEndpoint::builder()
         .alpns(vec![])
         .secret_key(secret_key)
         .bind(args.common.magic_port)
         .await?;
-    let iroh_data_dir = std::env::current_dir()?.join(".sendme-get");
+    let dir_name = format!(".sendme-get-{}", ticket.hash().to_hex());
+    let iroh_data_dir = std::env::current_dir()?.join(dir_name);
     let rt = iroh_bytes::util::runtime::Handle::from_current(1)?;
     let db = iroh_bytes::store::flat::Store::load(
         iroh_data_dir.clone(),
@@ -601,10 +604,9 @@ async fn get(args: GetArgs) -> anyhow::Result<()> {
     )
     .await?;
     let mp = MultiProgress::new();
-    let ticket = args.ticket;
-    let addr = ticket.node_addr().clone();
     let connect_progress = mp.add(ProgressBar::hidden());
     connect_progress.set_draw_target(ProgressDrawTarget::stderr());
+    connect_progress.set_style(ProgressStyle::default_spinner());
     connect_progress.set_message(format!("connecting to {}", addr.node_id));
     let connection = endpoint.connect(addr, &iroh_bytes::protocol::ALPN).await?;
     let hash_and_format = HashAndFormat {
@@ -621,12 +623,19 @@ async fn get(args: GetArgs) -> anyhow::Result<()> {
     let payload_size = sizes.iter().skip(1).sum::<u64>();
     eprintln!("getting {} blobs, {}", sizes.len(), HumanBytes(total_size));
     eprintln!(
-        "getting {} files, {}",
+        "getting collection {} {} files, {}",
+        print_hash(ticket.hash(), args.common.format),
         total_files,
         HumanBytes(payload_size)
     );
     let _task = tokio::spawn(show_download_progress(recv.into_stream(), total_size));
     let _stats = get::get(&db, connection, &hash_and_format, progress).await?;
+    if args.common.verbose > 0 {
+        let collection = Collection::load(&db, &hash_and_format.hash).await?;
+        for (name, hash) in collection.iter() {
+            println!("    {} {name}", print_hash(hash, args.common.format));
+        }
+    }
     export(db, hash_and_format).await?;
     std::fs::remove_dir_all(iroh_data_dir)?;
     Ok(())

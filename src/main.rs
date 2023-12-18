@@ -11,7 +11,7 @@ use iroh_bytes::{
         self, handle_connection, DownloadProgress, EventSender, RequestAuthorizationHandler,
     },
     store::{ExportMode, ImportMode, ImportProgress},
-    BlobFormat, Hash, HashAndFormat, TempTag,
+    BlobFormat, Hash, HashAndFormat, TempTag, get::fsm::DecodeError,
 };
 use iroh_bytes_util::get_hash_seq_and_sizes;
 use iroh_net::{key::SecretKey, MagicEndpoint};
@@ -342,8 +342,7 @@ fn get_export_path(root: &Path, name: &str) -> anyhow::Result<PathBuf> {
     Ok(path)
 }
 
-async fn export(db: impl iroh_bytes::store::Store, root: HashAndFormat) -> anyhow::Result<()> {
-    let collection = crate::collection::Collection::load(&db, &root.hash).await?;
+async fn export(db: impl iroh_bytes::store::Store, collection: Collection) -> anyhow::Result<()> {
     let root = std::env::current_dir()?;
     for (name, hash) in collection.iter() {
         let target = get_export_path(&root, name)?;
@@ -584,6 +583,30 @@ pub async fn show_download_progress(
     Ok(())
 }
 
+fn show_get_error(e: anyhow::Error) -> anyhow::Error {
+    if let Some(err) = e.downcast_ref::<DecodeError>() {
+       let error_text = match err {
+            DecodeError::NotFound => {
+                "provide side no longer has a file".to_string()
+            }
+            DecodeError::LeafNotFound(_) | DecodeError::ParentNotFound(_) => {
+                "provide side no longer has part of a file".to_string()
+            }
+            DecodeError::LeafHashMismatch(_) | DecodeError::ParentHashMismatch(_) => {
+                "provide side sent wrong data".to_string()
+            }
+            DecodeError::Io(err) => {
+                format!("generic network error: {}", err)
+            }
+            DecodeError::Read(err) => {
+                format!("error reading data from quinn: {}", err)
+            }
+        };
+        eprintln!("error: {}", error_text);
+    }
+    e
+}
+
 async fn get(args: GetArgs) -> anyhow::Result<()> {
     let ticket = args.ticket;
     let addr = ticket.node_addr().clone();
@@ -617,26 +640,36 @@ async fn get(args: GetArgs) -> anyhow::Result<()> {
     let (send, recv) = flume::bounded(32);
     let progress = iroh_bytes::util::progress::FlumeProgressSender::new(send);
     let (_hash_seq, sizes) =
-        get_hash_seq_and_sizes(&connection, &hash_and_format.hash, 1024 * 1024 * 32).await?;
+        get_hash_seq_and_sizes(&connection, &hash_and_format.hash, 1024 * 1024 * 32).await
+        .map_err(show_get_error)?;
     let total_size = sizes.iter().sum::<u64>();
     let total_files = sizes.len().saturating_sub(1);
     let payload_size = sizes.iter().skip(1).sum::<u64>();
-    eprintln!("getting {} blobs, {}", sizes.len(), HumanBytes(total_size));
     eprintln!(
         "getting collection {} {} files, {}",
         print_hash(ticket.hash(), args.common.format),
         total_files,
         HumanBytes(payload_size)
     );
-    let _task = tokio::spawn(show_download_progress(recv.into_stream(), total_size));
-    let _stats = get::get(&db, connection, &hash_and_format, progress).await?;
+    // print the details of the collection only in verbose mode
     if args.common.verbose > 0 {
-        let collection = Collection::load(&db, &hash_and_format.hash).await?;
+        eprintln!("getting {} blobs in total, {}", sizes.len(), HumanBytes(total_size));
+    }
+    let _task = tokio::spawn(show_download_progress(recv.into_stream(), total_size));
+    let _stats = get::get(&db, connection, &hash_and_format, progress).await
+    .map_err(show_get_error)?;
+    let collection = Collection::load(&db, &hash_and_format.hash).await?;
+    if args.common.verbose > 0 {
         for (name, hash) in collection.iter() {
             println!("    {} {name}", print_hash(hash, args.common.format));
         }
     }
-    export(db, hash_and_format).await?;
+    if let Some((name, _)) = collection.iter().next() {
+        if let Some(first) = name.split('/').next() {
+            println!("downloading to {}", first);
+        }
+    }
+    export(db, collection).await?;
     std::fs::remove_dir_all(iroh_data_dir)?;
     Ok(())
 }
@@ -651,9 +684,6 @@ async fn main() -> anyhow::Result<()> {
     };
     match res {
         Ok(()) => std::process::exit(0),
-        Err(e) => {
-            eprintln!("error: {}", e);
-            std::process::exit(1)
-        }
+        Err(_) => std::process::exit(1),
     }
 }

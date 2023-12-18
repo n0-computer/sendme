@@ -7,11 +7,12 @@ use indicatif::{
     HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
 };
 use iroh_bytes::{
+    get::fsm::DecodeError,
     provider::{
         self, handle_connection, DownloadProgress, EventSender, RequestAuthorizationHandler,
     },
     store::{ExportMode, ImportMode, ImportProgress},
-    BlobFormat, Hash, HashAndFormat, TempTag, get::fsm::DecodeError,
+    BlobFormat, Hash, HashAndFormat, TempTag,
 };
 use iroh_bytes_util::get_hash_seq_and_sizes;
 use iroh_net::{key::SecretKey, MagicEndpoint};
@@ -585,24 +586,26 @@ pub async fn show_download_progress(
 
 fn show_get_error(e: anyhow::Error) -> anyhow::Error {
     if let Some(err) = e.downcast_ref::<DecodeError>() {
-       let error_text = match err {
+        match err {
             DecodeError::NotFound => {
-                "provide side no longer has a file".to_string()
+                eprintln!("{}", style("provide side no longer has a file").yellow())
             }
-            DecodeError::LeafNotFound(_) | DecodeError::ParentNotFound(_) => {
-                "provide side no longer has part of a file".to_string()
-            }
+            DecodeError::LeafNotFound(_) | DecodeError::ParentNotFound(_) => eprintln!(
+                "{}",
+                style("provide side no longer has part of a file").yellow()
+            ),
+            DecodeError::Io(err) => eprintln!(
+                "{}",
+                style(format!("generic network error: {}", err)).yellow()
+            ),
+            DecodeError::Read(err) => eprintln!(
+                "{}",
+                style(format!("error reading data from quinn: {}", err)).yellow()
+            ),
             DecodeError::LeafHashMismatch(_) | DecodeError::ParentHashMismatch(_) => {
-                "provide side sent wrong data".to_string()
-            }
-            DecodeError::Io(err) => {
-                format!("generic network error: {}", err)
-            }
-            DecodeError::Read(err) => {
-                format!("error reading data from quinn: {}", err)
+                eprintln!("{}", style("provide side sent wrong data").red())
             }
         };
-        eprintln!("error: {}", error_text);
     }
     e
 }
@@ -640,8 +643,9 @@ async fn get(args: GetArgs) -> anyhow::Result<()> {
     let (send, recv) = flume::bounded(32);
     let progress = iroh_bytes::util::progress::FlumeProgressSender::new(send);
     let (_hash_seq, sizes) =
-        get_hash_seq_and_sizes(&connection, &hash_and_format.hash, 1024 * 1024 * 32).await
-        .map_err(show_get_error)?;
+        get_hash_seq_and_sizes(&connection, &hash_and_format.hash, 1024 * 1024 * 32)
+            .await
+            .map_err(show_get_error)?;
     let total_size = sizes.iter().sum::<u64>();
     let total_files = sizes.len().saturating_sub(1);
     let payload_size = sizes.iter().skip(1).sum::<u64>();
@@ -653,11 +657,16 @@ async fn get(args: GetArgs) -> anyhow::Result<()> {
     );
     // print the details of the collection only in verbose mode
     if args.common.verbose > 0 {
-        eprintln!("getting {} blobs in total, {}", sizes.len(), HumanBytes(total_size));
+        eprintln!(
+            "getting {} blobs in total, {}",
+            sizes.len(),
+            HumanBytes(total_size)
+        );
     }
     let _task = tokio::spawn(show_download_progress(recv.into_stream(), total_size));
-    let _stats = get::get(&db, connection, &hash_and_format, progress).await
-    .map_err(show_get_error)?;
+    let _stats = get::get(&db, connection, &hash_and_format, progress)
+        .await
+        .map_err(show_get_error)?;
     let collection = Collection::load(&db, &hash_and_format.hash).await?;
     if args.common.verbose > 0 {
         for (name, hash) in collection.iter() {

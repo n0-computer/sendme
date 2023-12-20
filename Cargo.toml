@@ -9,7 +9,6 @@ license = "Apache-2.0/MIT"
 repository = "https://github.com/n0-computer/dumb-pipe"
 description = "A cli tool to send directories over the network, with NAT hole punching"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 anyhow = "1.0.75"
@@ -20,9 +19,9 @@ flume = "0.11.0"
 futures = "0.3.29"
 hex = "0.4.3"
 indicatif = "0.17.7"
-iroh-bytes = { git = "https://github.com/n0-computer/iroh", branch = "public-get-utils" }
+iroh-bytes = "0.12"
 iroh-io = "0.3.0"
-iroh-net = { git = "https://github.com/n0-computer/iroh", branch = "public-get-utils" }
+iroh-net = "0.12"
 num_cpus = "1.16.0"
 rand = "0.8.5"
 tokio = { version = "1.34.0", features = ["full"] }

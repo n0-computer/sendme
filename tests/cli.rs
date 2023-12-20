@@ -3,8 +3,8 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
 };
-#[path = "../src/sendme_ticket.rs"]
-mod sendme_ticket;
+
+use iroh_net::ticket::BlobTicket;
 
 // binary path
 fn sendme_bin() -> &'static str {
@@ -65,7 +65,7 @@ fn provide_get_file() {
     let output = read_ascii_lines(4, &mut provide).unwrap();
     let output = String::from_utf8(output).unwrap();
     let ticket = output.split_ascii_whitespace().last().unwrap();
-    let ticket = sendme_ticket::Ticket::from_str(ticket).unwrap();
+    let ticket = BlobTicket::from_str(ticket).unwrap();
     let get = duct::cmd(sendme_bin(), ["get", &ticket.to_string()])
         .dir(tgt_dir.path())
         .env_remove("RUST_LOG") // disable tracing
@@ -117,7 +117,7 @@ fn provide_get_dir() {
     let output = read_ascii_lines(4, &mut provide).unwrap();
     let output = String::from_utf8(output).unwrap();
     let ticket = output.split_ascii_whitespace().last().unwrap();
-    let ticket = sendme_ticket::Ticket::from_str(ticket).unwrap();
+    let ticket = BlobTicket::from_str(ticket).unwrap();
     let get = duct::cmd(sendme_bin(), ["get", &ticket.to_string()])
         .dir(tgt_dir.path())
         .env_remove("RUST_LOG") // disable tracing

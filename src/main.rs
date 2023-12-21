@@ -121,12 +121,14 @@ pub struct GetArgs {
 /// Get the secret key or generate a new one.
 ///
 /// Print the secret key to stderr if it was generated, so the user can save it.
-fn get_or_create_secret() -> anyhow::Result<SecretKey> {
+fn get_or_create_secret(print: bool) -> anyhow::Result<SecretKey> {
     match std::env::var("IROH_SECRET") {
         Ok(secret) => SecretKey::from_str(&secret).context("invalid secret"),
         Err(_) => {
             let key = SecretKey::generate();
-            eprintln!("using secret key {}", key);
+            if print {
+                eprintln!("using secret key {}", key);
+            }
             Ok(key)
         }
     }
@@ -415,7 +417,7 @@ impl EventSender for ClientStatus {
 }
 
 async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
-    let secret_key = get_or_create_secret()?;
+    let secret_key = get_or_create_secret(args.common.verbose > 0)?;
     // create a magicsocket endpoint
     let endpoint_fut = MagicEndpoint::builder()
         .alpns(vec![iroh_bytes::protocol::ALPN.to_vec()])
@@ -583,7 +585,7 @@ fn show_get_error(e: anyhow::Error) -> anyhow::Error {
 async fn get(args: GetArgs) -> anyhow::Result<()> {
     let ticket = args.ticket;
     let addr = ticket.node_addr().clone();
-    let secret_key = get_or_create_secret()?;
+    let secret_key = get_or_create_secret(args.common.verbose > 0)?;
     let endpoint = MagicEndpoint::builder()
         .alpns(vec![])
         .secret_key(secret_key)
@@ -638,7 +640,7 @@ async fn get(args: GetArgs) -> anyhow::Result<()> {
     }
     if let Some((name, _)) = collection.iter().next() {
         if let Some(first) = name.split('/').next() {
-            println!("downloading to {}", first);
+            println!("downloading to: {};", first);
         }
     }
     export(db, collection).await?;

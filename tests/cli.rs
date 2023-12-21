@@ -62,7 +62,7 @@ fn provide_get_file() {
     .stderr_to_stdout()
     .reader()
     .unwrap();
-    let output = read_ascii_lines(4, &mut provide).unwrap();
+    let output = read_ascii_lines(3, &mut provide).unwrap();
     let output = String::from_utf8(output).unwrap();
     let ticket = output.split_ascii_whitespace().last().unwrap();
     let ticket = BlobTicket::from_str(ticket).unwrap();
@@ -114,7 +114,7 @@ fn provide_get_dir() {
     .stderr_to_stdout()
     .reader()
     .unwrap();
-    let output = read_ascii_lines(4, &mut provide).unwrap();
+    let output = read_ascii_lines(3, &mut provide).unwrap();
     let output = String::from_utf8(output).unwrap();
     let ticket = output.split_ascii_whitespace().last().unwrap();
     let ticket = BlobTicket::from_str(ticket).unwrap();

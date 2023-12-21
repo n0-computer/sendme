@@ -56,7 +56,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        name: [ubuntu-latest, ubuntu-arm-latest, macOS-arm-latest, windows-latest]
+        name: [ubuntu-latest, ubuntu-arm-latest, macOS-arm-latest, macOS-latest, windows-latest]
         rust: [stable]
         include:
           - name: ubuntu-arm-latest
@@ -67,11 +67,10 @@ jobs:
             os: ubuntu-latest
             target: linux-x86_64
             runner: [self-hosted, linux, X64]
-        # TODO: x86_64 runner is not available on the org level
-        #   - name: macOS-latest
-        #     os: macOS-latest
-        #     target: darwin-x86_64
-        #     runner: [self-hosted, macOS, X64]
+          - name: macOS-latest
+            os: macOS-latest
+            target: darwin-x86_64
+            runner: [self-hosted, macOS, X64]
           - name: macOS-arm-latest
             os: macOS-latest
             target: darwin-aarch64

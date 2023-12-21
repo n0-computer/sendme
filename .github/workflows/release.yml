@@ -19,9 +19,10 @@ on:
   push:
     tags:
     - "v*"
+  workflow_dispatch:
 
 env:
-  BIN_NAME: dumbpipe
+  BIN_NAME: sendme
 jobs:
   create-release:
     name: create-release

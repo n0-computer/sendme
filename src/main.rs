@@ -629,7 +629,7 @@ async fn get(args: GetArgs) -> anyhow::Result<()> {
         );
     }
     let _task = tokio::spawn(show_download_progress(recv.into_stream(), total_size));
-    let _stats = iroh_bytes::get::db::get_to_db(&db, connection, &hash_and_format, progress)
+    let stats = iroh_bytes::get::db::get_to_db(&db, connection, &hash_and_format, progress)
         .await
         .map_err(show_get_error)?;
     let collection = Collection::load(&db, &hash_and_format.hash).await?;
@@ -645,6 +645,15 @@ async fn get(args: GetArgs) -> anyhow::Result<()> {
     }
     export(db, collection).await?;
     std::fs::remove_dir_all(iroh_data_dir)?;
+    if args.common.verbose > 0 {
+        println!(
+            "downloaded {} files, {}. took {} ({}/s)",
+            total_files,
+            HumanBytes(payload_size),
+            HumanDuration(stats.elapsed),
+            HumanBytes((stats.bytes_read as f64 / stats.elapsed.as_secs_f64()) as u64),
+        );
+    }
     Ok(())
 }
 

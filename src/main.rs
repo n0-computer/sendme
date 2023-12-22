@@ -8,7 +8,11 @@ use indicatif::{
 };
 use iroh_bytes::{
     format::collection::Collection,
-    get::{db::DownloadProgress, fsm::DecodeError, request::get_hash_seq_and_sizes},
+    get::{
+        db::DownloadProgress,
+        fsm::{AtBlobHeaderNextError, DecodeError},
+        request::get_hash_seq_and_sizes,
+    },
     provider::{self, handle_connection, EventSender},
     store::{ExportMode, ImportMode, ImportProgress},
     BlobFormat, Hash, HashAndFormat, TempTag,
@@ -578,6 +582,26 @@ fn show_get_error(e: anyhow::Error) -> anyhow::Error {
                 eprintln!("{}", style("provide side sent wrong data").red())
             }
         };
+    } else if let Some(header_error) = e.downcast_ref::<AtBlobHeaderNextError>() {
+        // TODO(iroh-bytes): get_to_db should have a concrete error type so you don't have to guess
+        match header_error {
+            AtBlobHeaderNextError::Io(err) => eprintln!(
+                "{}",
+                style(format!("generic network error: {}", err)).yellow()
+            ),
+            AtBlobHeaderNextError::Read(err) => eprintln!(
+                "{}",
+                style(format!("error reading data from quinn: {}", err)).yellow()
+            ),
+            AtBlobHeaderNextError::NotFound => {
+                eprintln!("{}", style("provide side no longer has a file").yellow())
+            }
+        };
+    } else {
+        eprintln!(
+            "{}",
+            style(format!("generic error: {:?}", e.root_cause())).red()
+        );
     }
     e
 }

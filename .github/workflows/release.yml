@@ -119,7 +119,12 @@ jobs:
       if: ${{ contains(matrix.cargo_targets, '-musl') }}
       run: sudo apt-get install musl-tools -y
     - name: Build release binary
-      run: cargo build --verbose --release --target ${{ matrix.cargo_targets }}
+      run: |
+        if [ "${{ matrix.name }}" = "ubuntu-arm-latest" ]; then
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc
+          export CC=aarch64-linux-gnu-gcc
+        fi
+        cargo build --verbose --release --target ${{ matrix.cargo_targets }}
     - name: Build archive
       shell: bash
       run: |

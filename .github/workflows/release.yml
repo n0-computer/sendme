@@ -82,12 +82,12 @@ jobs:
           - name: ubuntu-arm-latest
             os: ubuntu-latest
             target: linux-aarch64
-            cargo_targets: "arm-unknown-linux-musleabi"
+            cargo_targets: "aarch64-unknown-linux-musl"
             runner: [self-hosted, linux, ARM64]
           - name: ubuntu-latest
             os: ubuntu-latest
             target: linux-x86_64
-            cargo_targets: "i686-unknown-linux-musl"
+            cargo_targets: "x86_64-unknown-linux-musl"
             runner: [self-hosted, linux, X64]
           - name: macOS-latest
             os: macOS-latest

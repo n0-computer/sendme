@@ -20,6 +20,19 @@ on:
     tags:
     - "v*"
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Release version"
+        required: true
+        default: ""
+      create_release:
+        description: "Create release"
+        required: true
+        default: "true"
+      upload_artifacts:
+        description: "Upload artifacts"
+        required: true
+        default: "true"
 
 env:
   BIN_NAME: sendme
@@ -27,16 +40,23 @@ jobs:
   create-release:
     name: create-release
     runs-on: ubuntu-latest
+    if: github.event.inputs.create_release == 'true' || github.event_name == 'push'
     outputs:
       upload_url: ${{ steps.release.outputs.upload_url }}
       release_version: ${{ env.RELEASE_VERSION }}
     steps:
-    - name: Get the release version from the tag
+    - name: Get the release version from the tag (push)
       shell: bash
-      if: env.RELEASE_VERSION == ''
+      if: env.RELEASE_VERSION == '' && github.event_name == 'push'
       run: |
         # See: https://github.community/t5/GitHub-Actions/How-to-get-just-the-tag-name/m-p/32167/highlight/true#M1027
         echo "RELEASE_VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+        echo "version is: ${{ env.RELEASE_VERSION }}"
+    - name: Get the release version from the tag (dispatch)
+      shell: bash
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        echo "RELEASE_VERSION=${{ github.event.inputs.releae_version }}" >> $GITHUB_ENV
         echo "version is: ${{ env.RELEASE_VERSION }}"
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -62,18 +82,22 @@ jobs:
           - name: ubuntu-arm-latest
             os: ubuntu-latest
             target: linux-aarch64
+            cargo_targets: "arm-unknown-linux-musleabi"
             runner: [self-hosted, linux, ARM64]
           - name: ubuntu-latest
             os: ubuntu-latest
             target: linux-x86_64
+            cargo_targets: "i686-unknown-linux-musl"
             runner: [self-hosted, linux, X64]
           - name: macOS-latest
             os: macOS-latest
             target: darwin-x86_64
+            cargo_targets: "x86_64-apple-darwin"
             runner: [self-hosted, macOS, X64]
           - name: macOS-arm-latest
             os: macOS-latest
             target: darwin-aarch64
+            cargo_targets: "aarch64-apple-darwin"
             runner: [self-hosted, macOS, ARM64]
         # TODO: windows runner is not available on the org level
           - name: windows-latest
@@ -89,26 +113,27 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
       with:
         toolchain: ${{ matrix.rust }}
+        targets: ${{ matrix.cargo_targets }}
     - name: Build release binary
       run: cargo build --verbose --release
     - name: Build archive
       shell: bash
       run: |
-        outdir="./target/release"
         staging="${{ env.BIN_NAME }}-${{ needs.create-release.outputs.release_version }}-${{ matrix.target }}"
         mkdir -p "$staging"
         if [ "${{ matrix.os }}" = "windows-latest" ]; then
-          cp "target/release/${{ env.BIN_NAME }}.exe" "$staging/"
+          cp "target/${{ matrix.cargo_targets }}/${{ env.BIN_NAME }}.exe" "$staging/"
           cd "$staging"
           7z a "../$staging.zip" .
           echo "ASSET=$staging.zip" >> $GITHUB_ENV
         else
-          cp "target/release/${{ env.BIN_NAME }}" "$staging/"
+          cp "target/${{ matrix.cargo_targets }}/${{ env.BIN_NAME }}" "$staging/"
           tar czf "$staging.tar.gz" -C "$staging" .
           echo "ASSET=$staging.tar.gz" >> $GITHUB_ENV
         fi
     - name: Upload release archive
       uses: actions/upload-release-asset@v1.0.2
+      if: github.event.inputs.upload_artifacts == 'true' || github.event_name == 'push'
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:

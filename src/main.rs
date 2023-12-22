@@ -334,6 +334,14 @@ async fn export(db: impl iroh_bytes::store::Store, collection: Collection) -> an
     let root = std::env::current_dir()?;
     for (name, hash) in collection.iter() {
         let target = get_export_path(&root, name)?;
+        if target.exists() {
+            eprintln!(
+                "target {} already exists. Export stopped.",
+                target.display()
+            );
+            eprintln!("You can remove the file or directory and try again. The download will not be repeated.");
+            anyhow::bail!("target {} already exists", target.display());
+        }
         db.export(*hash, target, ExportMode::TryReference, |_position| Ok(()))
             .await?;
     }

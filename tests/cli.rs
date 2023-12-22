@@ -45,7 +45,7 @@ fn read_ascii_lines(mut n: usize, reader: &mut impl Read) -> io::Result<Vec<u8>>
 // }
 
 #[test]
-fn provide_get_file() {
+fn send_recv_file() {
     let name = "somefile.bin";
     let data = vec![0u8; 100];
     // create src and tgt dir, and src file
@@ -53,33 +53,33 @@ fn provide_get_file() {
     let tgt_dir = tempfile::tempdir().unwrap();
     let src_file = src_dir.path().join(name);
     std::fs::write(&src_file, &data).unwrap();
-    let mut provide = duct::cmd(
+    let mut send_cmd = duct::cmd(
         sendme_bin(),
-        ["provide", src_file.as_os_str().to_str().unwrap()],
+        ["send", src_file.as_os_str().to_str().unwrap()],
     )
     .dir(src_dir.path())
     .env_remove("RUST_LOG") // disable tracing
     .stderr_to_stdout()
     .reader()
     .unwrap();
-    let output = read_ascii_lines(3, &mut provide).unwrap();
+    let output = read_ascii_lines(3, &mut send_cmd).unwrap();
     let output = String::from_utf8(output).unwrap();
     let ticket = output.split_ascii_whitespace().last().unwrap();
     let ticket = BlobTicket::from_str(ticket).unwrap();
-    let get = duct::cmd(sendme_bin(), ["get", &ticket.to_string()])
+    let receive_output = duct::cmd(sendme_bin(), ["receive", &ticket.to_string()])
         .dir(tgt_dir.path())
         .env_remove("RUST_LOG") // disable tracing
         .stderr_to_stdout()
         .run()
         .unwrap();
-    assert!(get.status.success());
+    assert!(receive_output.status.success());
     let tgt_file = tgt_dir.path().join(name);
     let tgt_data = std::fs::read(tgt_file).unwrap();
     assert_eq!(tgt_data, data);
 }
 
 #[test]
-fn provide_get_dir() {
+fn send_recv_dir() {
     fn create_file(base: &Path, i: usize, j: usize, k: usize) -> (PathBuf, Vec<u8>) {
         let name = base
             .join(format!("dir-{}", i))
@@ -105,26 +105,26 @@ fn provide_get_dir() {
             }
         }
     }
-    let mut provide = duct::cmd(
+    let mut send_cmd = duct::cmd(
         sendme_bin(),
-        ["provide", src_data_dir.as_os_str().to_str().unwrap()],
+        ["send", src_data_dir.as_os_str().to_str().unwrap()],
     )
     .dir(src_dir.path())
     .env_remove("RUST_LOG") // disable tracing
     .stderr_to_stdout()
     .reader()
     .unwrap();
-    let output = read_ascii_lines(3, &mut provide).unwrap();
+    let output = read_ascii_lines(3, &mut send_cmd).unwrap();
     let output = String::from_utf8(output).unwrap();
     let ticket = output.split_ascii_whitespace().last().unwrap();
     let ticket = BlobTicket::from_str(ticket).unwrap();
-    let get = duct::cmd(sendme_bin(), ["get", &ticket.to_string()])
+    let receive_output = duct::cmd(sendme_bin(), ["receive", &ticket.to_string()])
         .dir(tgt_dir.path())
         .env_remove("RUST_LOG") // disable tracing
         .stderr_to_stdout()
         .run()
         .unwrap();
-    assert!(get.status.success());
+    assert!(receive_output.status.success());
     // validate directory structure
     for i in 0..5 {
         for j in 0..5 {

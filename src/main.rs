@@ -79,11 +79,11 @@ fn print_hash(hash: &Hash, format: Format) -> String {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Provide a file or directory.
-    Provide(ProvideArgs),
+    /// Send a file or directory.
+    Send(SendArgs),
 
-    /// Get a file or directory.
-    Get(GetArgs),
+    /// Receive a file or directory.
+    Receive(ReceiveArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -102,8 +102,8 @@ pub struct CommonArgs {
     pub verbose: u8,
 }
 #[derive(Parser, Debug)]
-pub struct ProvideArgs {
-    /// Path to the file or directory to provide.
+pub struct SendArgs {
+    /// Path to the file or directory to send.
     ///
     /// The last component of the path will be used as the name of the data
     /// being shared.
@@ -114,8 +114,8 @@ pub struct ProvideArgs {
 }
 
 #[derive(Parser, Debug)]
-pub struct GetArgs {
-    /// The ticket to use to connect to the provider.
+pub struct ReceiveArgs {
+    /// The ticket to use to connect to the sender.
     pub ticket: BlobTicket,
 
     #[clap(flatten)]
@@ -338,12 +338,12 @@ async fn export(db: impl iroh_bytes::store::Store, collection: Collection) -> an
 }
 
 #[derive(Debug, Clone)]
-struct ProvideStatus {
+struct SendStatus {
     /// the multiprogress bar
     mp: MultiProgress,
 }
 
-impl ProvideStatus {
+impl SendStatus {
     fn new() -> Self {
         let mp = MultiProgress::new();
         mp.set_draw_target(ProgressDrawTarget::stderr());
@@ -420,7 +420,7 @@ impl EventSender for ClientStatus {
     }
 }
 
-async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
+async fn send(args: SendArgs) -> anyhow::Result<()> {
     let secret_key = get_or_create_secret(args.common.verbose > 0)?;
     // create a magicsocket endpoint
     let endpoint_fut = MagicEndpoint::builder()
@@ -430,7 +430,7 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
     // use a flat store - todo: use a partial in mem store instead
     let suffix = rand::thread_rng().gen::<[u8; 16]>();
     let iroh_data_dir =
-        std::env::current_dir()?.join(format!(".sendme-provide-{}", hex::encode(suffix)));
+        std::env::current_dir()?.join(format!(".sendme-send-{}", hex::encode(suffix)));
     if iroh_data_dir.exists() {
         println!("can not share twice from the same directory");
         std::process::exit(1);
@@ -471,8 +471,8 @@ async fn provide(args: ProvideArgs) -> anyhow::Result<()> {
         }
     }
     println!("to get this data, use");
-    println!("sendme get {}", ticket);
-    let ps = ProvideStatus::new();
+    println!("sendme receive {}", ticket);
+    let ps = SendStatus::new();
     let rt = LocalPoolHandle::new(1);
     loop {
         let Some(connecting) = endpoint.accept().await else {
@@ -564,11 +564,11 @@ fn show_get_error(e: anyhow::Error) -> anyhow::Error {
     if let Some(err) = e.downcast_ref::<DecodeError>() {
         match err {
             DecodeError::NotFound => {
-                eprintln!("{}", style("provide side no longer has a file").yellow())
+                eprintln!("{}", style("send side no longer has a file").yellow())
             }
             DecodeError::LeafNotFound(_) | DecodeError::ParentNotFound(_) => eprintln!(
                 "{}",
-                style("provide side no longer has part of a file").yellow()
+                style("send side no longer has part of a file").yellow()
             ),
             DecodeError::Io(err) => eprintln!(
                 "{}",
@@ -579,7 +579,7 @@ fn show_get_error(e: anyhow::Error) -> anyhow::Error {
                 style(format!("error reading data from quinn: {}", err)).yellow()
             ),
             DecodeError::LeafHashMismatch(_) | DecodeError::ParentHashMismatch(_) => {
-                eprintln!("{}", style("provide side sent wrong data").red())
+                eprintln!("{}", style("send side sent wrong data").red())
             }
         };
     } else if let Some(header_error) = e.downcast_ref::<AtBlobHeaderNextError>() {
@@ -594,7 +594,7 @@ fn show_get_error(e: anyhow::Error) -> anyhow::Error {
                 style(format!("error reading data from quinn: {}", err)).yellow()
             ),
             AtBlobHeaderNextError::NotFound => {
-                eprintln!("{}", style("provide side no longer has a file").yellow())
+                eprintln!("{}", style("send side no longer has a file").yellow())
             }
         };
     } else {
@@ -606,7 +606,7 @@ fn show_get_error(e: anyhow::Error) -> anyhow::Error {
     e
 }
 
-async fn get(args: GetArgs) -> anyhow::Result<()> {
+async fn get(args: ReceiveArgs) -> anyhow::Result<()> {
     let ticket = args.ticket;
     let addr = ticket.node_addr().clone();
     let secret_key = get_or_create_secret(args.common.verbose > 0)?;
@@ -686,8 +686,8 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
     let res = match args.command {
-        Commands::Provide(args) => provide(args).await,
-        Commands::Get(args) => get(args).await,
+        Commands::Send(args) => send(args).await,
+        Commands::Receive(args) => get(args).await,
     };
     match res {
         Ok(()) => std::process::exit(0),

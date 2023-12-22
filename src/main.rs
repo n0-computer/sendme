@@ -1,6 +1,9 @@
 //! Command line arguments.
 use anyhow::Context;
-use clap::{Parser, Subcommand};
+use clap::{
+    error::{ContextKind, ErrorKind},
+    CommandFactory, Parser, Subcommand,
+};
 use console::style;
 use futures::{future, FutureExt, Stream, StreamExt};
 use indicatif::{
@@ -684,7 +687,21 @@ async fn get(args: ReceiveArgs) -> anyhow::Result<()> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
-    let args = Args::parse();
+    let args = match Args::try_parse() {
+        Ok(args) => args,
+        Err(cause) => {
+            if let Some(text) = cause.get(ContextKind::InvalidSubcommand) {
+                eprintln!("{} \"{}\"\n", ErrorKind::InvalidSubcommand, text);
+                eprintln!("Available subcommands are");
+                for cmd in Args::command().get_subcommands() {
+                    eprintln!("    {}", style(cmd.get_name()).bold());
+                }
+                std::process::exit(1);
+            } else {
+                cause.exit();
+            }
+        }
+    };
     let res = match args.command {
         Commands::Send(args) => send(args).await,
         Commands::Receive(args) => get(args).await,

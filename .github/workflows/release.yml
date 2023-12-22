@@ -117,7 +117,7 @@ jobs:
         targets: ${{ matrix.cargo_targets }}
     - name: Ensure musl support
       if: ${{ contains(matrix.cargo_targets, '-musl') }}
-      run: sudo apt-get install musl-tools
+      run: sudo apt-get install musl-tools -y
     - name: Build release binary
       run: cargo build --verbose --release --target ${{ matrix.cargo_targets }}
     - name: Build archive

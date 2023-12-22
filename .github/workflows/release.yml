@@ -62,18 +62,22 @@ jobs:
           - name: ubuntu-arm-latest
             os: ubuntu-latest
             target: linux-aarch64
+            cargo_targets: "arm-unknown-linux-musleabi"
             runner: [self-hosted, linux, ARM64]
           - name: ubuntu-latest
             os: ubuntu-latest
             target: linux-x86_64
+            cargo_targets: "i686-unknown-linux-musl"
             runner: [self-hosted, linux, X64]
           - name: macOS-latest
             os: macOS-latest
             target: darwin-x86_64
+            cargo_targets: "x86_64-apple-darwin"
             runner: [self-hosted, macOS, X64]
           - name: macOS-arm-latest
             os: macOS-latest
             target: darwin-aarch64
+            cargo_targets: "aarch64-apple-darwin"
             runner: [self-hosted, macOS, ARM64]
         # TODO: windows runner is not available on the org level
           - name: windows-latest
@@ -89,6 +93,7 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
       with:
         toolchain: ${{ matrix.rust }}
+        targets: ${{ matrix.cargo_targets }}
     - name: Build release binary
       run: cargo build --verbose --release
     - name: Build archive

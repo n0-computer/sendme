@@ -103,6 +103,7 @@ jobs:
           - name: windows-latest
             os: windows-latest
             target: windows-x86_64
+            cargo_targets: "x86_64-pc-windows-msvc"
             runner: [windows-latest]
     steps:
     - name: Checkout repository
@@ -115,19 +116,19 @@ jobs:
         toolchain: ${{ matrix.rust }}
         targets: ${{ matrix.cargo_targets }}
     - name: Build release binary
-      run: cargo build --verbose --release
+      run: cargo build --verbose --release --target ${{ matrix.cargo_targets }}
     - name: Build archive
       shell: bash
       run: |
         staging="${{ env.BIN_NAME }}-${{ needs.create-release.outputs.release_version }}-${{ matrix.target }}"
         mkdir -p "$staging"
         if [ "${{ matrix.os }}" = "windows-latest" ]; then
-          cp "target/release/${{ env.BIN_NAME }}.exe" "$staging/"
+          cp "target/${{ matrix.cargo_targets }}/${{ env.BIN_NAME }}.exe" "$staging/"
           cd "$staging"
           7z a "../$staging.zip" .
           echo "ASSET=$staging.zip" >> $GITHUB_ENV
         else
-          cp "target/release/${{ env.BIN_NAME }}" "$staging/"
+          cp "target/${{ matrix.cargo_targets }}/${{ env.BIN_NAME }}" "$staging/"
           tar czf "$staging.tar.gz" -C "$staging" .
           echo "ASSET=$staging.tar.gz" >> $GITHUB_ENV
         fi

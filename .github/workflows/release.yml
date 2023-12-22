@@ -119,6 +119,7 @@ jobs:
       if: ${{ contains(matrix.cargo_targets, '-musl') }}
       run: sudo apt-get install musl-tools -y
     - name: Build release binary
+      shell: bash
       run: |
         if [ "${{ matrix.name }}" = "ubuntu-arm-latest" ]; then
           export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc
@@ -131,12 +132,12 @@ jobs:
         staging="${{ env.BIN_NAME }}-${{ needs.create-release.outputs.release_version }}-${{ matrix.target }}"
         mkdir -p "$staging"
         if [ "${{ matrix.os }}" = "windows-latest" ]; then
-          cp "target/${{ matrix.cargo_targets }}/${{ env.BIN_NAME }}.exe" "$staging/"
+          cp "target/${{ matrix.cargo_targets }}/release/${{ env.BIN_NAME }}.exe" "$staging/"
           cd "$staging"
           7z a "../$staging.zip" .
           echo "ASSET=$staging.zip" >> $GITHUB_ENV
         else
-          cp "target/${{ matrix.cargo_targets }}/${{ env.BIN_NAME }}" "$staging/"
+          cp "target/${{ matrix.cargo_targets }}/release/${{ env.BIN_NAME }}" "$staging/"
           tar czf "$staging.tar.gz" -C "$staging" .
           echo "ASSET=$staging.tar.gz" >> $GITHUB_ENV
         fi

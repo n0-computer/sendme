@@ -15,7 +15,7 @@ struct sendmeApp: App {
             ContentView()
               .environmentObject(irohNodeManager)
               .onAppear() {
-                irohNodeManager.start()
+                  irohNodeManager.start()
               }
         }
     }

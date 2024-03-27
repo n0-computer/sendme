@@ -22,6 +22,7 @@
 		42C61F6A2BB3BB2400762786 /* Send.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42C61F692BB3BB2400762786 /* Send.swift */; };
 		42C61F6C2BB3BEC200762786 /* DocumentPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42C61F6B2BB3BEC200762786 /* DocumentPicker.swift */; };
 		42C61F6E2BB3CEC500762786 /* ShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42C61F6D2BB3CEC500762786 /* ShareSheet.swift */; };
+		42C808FA2BB4948300114DC5 /* AppError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42C808F92BB4948300114DC5 /* AppError.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -58,6 +59,7 @@
 		42C61F692BB3BB2400762786 /* Send.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Send.swift; sourceTree = "<group>"; };
 		42C61F6B2BB3BEC200762786 /* DocumentPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentPicker.swift; sourceTree = "<group>"; };
 		42C61F6D2BB3CEC500762786 /* ShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareSheet.swift; sourceTree = "<group>"; };
+		42C808F92BB4948300114DC5 /* AppError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppError.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -121,6 +123,7 @@
 				42C61F652BB3A82A00762786 /* Receive.swift */,
 				42C61F6B2BB3BEC200762786 /* DocumentPicker.swift */,
 				42C61F6D2BB3CEC500762786 /* ShareSheet.swift */,
+				42C808F92BB4948300114DC5 /* AppError.swift */,
 			);
 			path = sendme;
 			sourceTree = "<group>";
@@ -300,6 +303,7 @@
 				42C61F6A2BB3BB2400762786 /* Send.swift in Sources */,
 				4235A9C52BB306190013D818 /* ContentView.swift in Sources */,
 				42C61F662BB3A82A00762786 /* Receive.swift in Sources */,
+				42C808FA2BB4948300114DC5 /* AppError.swift in Sources */,
 				4235A9C32BB306190013D818 /* sendmeApp.swift in Sources */,
 				42C61F6C2BB3BEC200762786 /* DocumentPicker.swift in Sources */,
 				42C61F6E2BB3CEC500762786 /* ShareSheet.swift in Sources */,
@@ -477,6 +481,7 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportsDocumentBrowser = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -509,6 +514,7 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportsDocumentBrowser = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

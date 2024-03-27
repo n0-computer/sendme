@@ -13,7 +13,6 @@ class IrohNodeManager: ObservableObject {
   static let shared = IrohNodeManager()
 
   @Published var node: IrohNode?
-  @Published var nodeID: String = ""
   @Published var author: AuthorId?
   @Published var nodeStats: [String : CounterStats]?
   @Published var connections: [ConnectionInfoIdentifiable]?
@@ -23,19 +22,33 @@ class IrohNodeManager: ObservableObject {
   private var timer: Timer?
   
   func start() {
-//    IrohLib.setLogLevel(level: .debug)
-    do {
-      try IrohLib.startMetricsCollection()
-      let path = self.irohPath()
-      print(path.absoluteString)
-      self.node = try IrohNode(path: path.path)
-      nodeID = node?.nodeId() ?? ""
-      startConnectionMonitoring()
-      startStatsMonitoring()
-      initAuthor()
-      print("created iroh node with node Id \(nodeID)")
-    } catch {
-      print("error creating iroh node \(error)")
+    Task {
+      let newNode = await self.startInner()
+      await MainActor.run {
+        self.node = newNode
+        startConnectionMonitoring()
+        startStatsMonitoring()
+        initAuthor()
+      }
+    }
+  }
+  
+  func startInner() async -> IrohNode? {
+    await withCheckedContinuation { continuation in
+      DispatchQueue.global(qos: .background).async {
+        //    IrohLib.setLogLevel(level: .debug)
+        var node: IrohNode?
+        do {
+          try IrohLib.startMetricsCollection()
+          let path = self.irohPath()
+          print(path.absoluteString)
+          node = try IrohNode(path: path.path)
+          print("created iroh node with node Id \(node!.nodeId())")
+        } catch {
+          print("error creating iroh node \(error)")
+        }
+        continuation.resume(returning: node)
+      }
     }
   }
   

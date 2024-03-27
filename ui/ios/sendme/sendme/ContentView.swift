@@ -10,13 +10,13 @@ import SwiftUI
 struct ContentView: View {
     var body: some View {
       TabView {
-        Send()
-          .tabItem {
-            Label("Send", systemImage: "terminal")
-          }
         Receive()
           .tabItem {
             Label("Receive", systemImage: "macpro.gen2.fill")
+          }
+        Send()
+          .tabItem {
+            Label("Send", systemImage: "terminal")
           }
       }
     }

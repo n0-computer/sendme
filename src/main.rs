@@ -9,6 +9,7 @@ use futures::{future, FutureExt, Stream, StreamExt};
 use indicatif::{
     HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
 };
+use iroh_base::ticket::BlobTicket;
 use iroh_bytes::{
     format::collection::Collection,
     get::{
@@ -20,7 +21,7 @@ use iroh_bytes::{
     store::{ExportMode, ImportMode, ImportProgress},
     BlobFormat, Hash, HashAndFormat, TempTag,
 };
-use iroh_net::{key::SecretKey, ticket::BlobTicket, MagicEndpoint};
+use iroh_net::{key::SecretKey, MagicEndpoint};
 use rand::Rng;
 use std::{
     collections::BTreeMap,
@@ -342,8 +343,13 @@ async fn export(db: impl iroh_bytes::store::Store, collection: Collection) -> an
             eprintln!("You can remove the file or directory and try again. The download will not be repeated.");
             anyhow::bail!("target {} already exists", target.display());
         }
-        db.export(*hash, target, ExportMode::TryReference, |_position| Ok(()))
-            .await?;
+        db.export(
+            *hash,
+            target,
+            ExportMode::TryReference,
+            Box::new(move |_position| Ok(())),
+        )
+        .await?;
     }
     Ok(())
 }
@@ -455,14 +461,14 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         anyhow::Ok(())
     });
     std::fs::create_dir_all(&iroh_data_dir)?;
-    let db = iroh_bytes::store::flat::Store::load(&iroh_data_dir).await?;
+    let db = iroh_bytes::store::fs::Store::load(&iroh_data_dir).await?;
     let path = args.path;
     let (temp_tag, size, collection) = import(path.clone(), db.clone()).await?;
     let hash = *temp_tag.hash();
     // wait for the endpoint to be ready
     let endpoint = endpoint_fut.await?;
     // wait for the endpoint to figure out its address before making a ticket
-    while endpoint.my_derp().is_none() {
+    while endpoint.my_relay().is_none() {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     // make a ticket
@@ -546,20 +552,14 @@ pub async fn show_download_progress(
             DownloadProgress::Done { id } => {
                 total_done += sizes.remove(&id).unwrap_or_default();
             }
-            DownloadProgress::NetworkDone {
-                bytes_read,
-                elapsed,
-                ..
-            } => {
+            DownloadProgress::AllDone(stats) => {
                 op.finish_and_clear();
                 eprintln!(
                     "Transferred {} in {}, {}/s",
-                    HumanBytes(bytes_read),
-                    HumanDuration(elapsed),
-                    HumanBytes((bytes_read as f64 / elapsed.as_secs_f64()) as u64)
+                    HumanBytes(stats.bytes_read),
+                    HumanDuration(stats.elapsed),
+                    HumanBytes((stats.bytes_read as f64 / stats.elapsed.as_secs_f64()) as u64)
                 );
-            }
-            DownloadProgress::AllDone => {
                 break;
             }
             DownloadProgress::Abort(e) => {
@@ -628,7 +628,7 @@ async fn get(args: ReceiveArgs) -> anyhow::Result<()> {
         .await?;
     let dir_name = format!(".sendme-get-{}", ticket.hash().to_hex());
     let iroh_data_dir = std::env::current_dir()?.join(dir_name);
-    let db = iroh_bytes::store::flat::Store::load(&iroh_data_dir).await?;
+    let db = iroh_bytes::store::fs::Store::load(&iroh_data_dir).await?;
     let mp = MultiProgress::new();
     let connect_progress = mp.add(ProgressBar::hidden());
     connect_progress.set_draw_target(ProgressDrawTarget::stderr());
@@ -664,9 +664,10 @@ async fn get(args: ReceiveArgs) -> anyhow::Result<()> {
         );
     }
     let _task = tokio::spawn(show_download_progress(recv.into_stream(), total_size));
-    let stats = iroh_bytes::get::db::get_to_db(&db, connection, &hash_and_format, progress)
+    let get_conn = || async move { Ok(connection) };
+    let stats = iroh_bytes::get::db::get_to_db(&db, get_conn, &hash_and_format, progress)
         .await
-        .map_err(show_get_error)?;
+        .map_err(|e| show_get_error(anyhow::anyhow!(e)))?;
     let collection = Collection::load(&db, &hash_and_format.hash).await?;
     if args.common.verbose > 0 {
         for (name, hash) in collection.iter() {

@@ -473,6 +473,7 @@
 				DEVELOPMENT_TEAM = 7K8LD2955M;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Used to scan QR codes!";
 				INFOPLIST_KEY_NSDocumentsFolderUsageDescription = "for sending files";
 				INFOPLIST_KEY_NSFileProviderDomainUsageDescription = wat;
@@ -506,6 +507,7 @@
 				DEVELOPMENT_TEAM = 7K8LD2955M;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Used to scan QR codes!";
 				INFOPLIST_KEY_NSDocumentsFolderUsageDescription = "for sending files";
 				INFOPLIST_KEY_NSFileProviderDomainUsageDescription = wat;

@@ -7,6 +7,7 @@
 
 import Foundation
 import SwiftUI
+import UIKit
 import IrohLib
 import CodeScanner
 
@@ -25,7 +26,12 @@ struct Receive: View {
   private var progressManager: DownloadProgressManager = DownloadProgressManager()
   
   var body: some View {
-    stepView
+    VStack {
+      stepView
+    }
+    .alert(item: $currentError) { error in
+      Alert(title: Text(error.title), message: Text(error.localizedDescription), dismissButton: .default(Text("OK")))
+    }
   }
   
   private var stepView: some View {
@@ -74,12 +80,18 @@ struct Receive: View {
                 return
               }
               
-              try node.blobsDownload(req: ticket.asDownloadRequest(), cb: progressManager)
-              let blobs = try node.blobsGetCollection(hash: ticket.hash()).blobs()
-              for blob in blobs {
-                let data = try node.blobsReadToBytes(hash: blob.link)
-                saveFileToDocumentsDirectory(fileName: blob.name, data: data)
-              }
+              try node.blobsDownload(
+                req: ticket.asDownloadRequest(),
+                cb: progressManager
+              )
+              let documentsDirectoryURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+              print("exporting to: \(documentsDirectoryURL.relativePath)")
+              try node.blobsExport(
+                hash: ticket.hash(),
+                destination: documentsDirectoryURL.relativePath,
+                format: BlobExportFormat.collection,
+                mode: BlobExportMode.tryReference
+              )
             } catch let error {
               currentError = .downloadFailed(error.localizedDescription)
             }
@@ -101,15 +113,15 @@ struct Receive: View {
               }
             })
         }
-        .alert(item: $currentError) { error in
-          Alert(title: Text(error.title), message: Text(error.localizedDescription), dismissButton: .default(Text("OK")))
-        }
       }
     })
   }
   
   private func downloading() -> any View {
-    return AnyView(VStack {
+    return AnyView(VStack(spacing: 5) {
+      ProgressView()
+          .progressViewStyle(CircularProgressViewStyle())
+          .scaleEffect(1.5)
       Text("Downloading")
     }.padding())
   }
@@ -121,6 +133,14 @@ struct Receive: View {
         self.ticketString = ""
         step = .configuring
       }
+      Button("Show in Files App") {
+          if let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+              // Switch URL scheme to this psudo-documents "shareddocuments":
+              let url = URL(string: "shareddocuments://" + url.path())!
+              print("opening \(url)")
+              UIApplication.shared.open(url)
+          }
+      }
     }.padding())
   }
 }
@@ -129,12 +149,12 @@ class DownloadProgressManager: DownloadCallback {
   
   func progress(progress: DownloadProgress) throws {
     switch progress.type() {
-//    case .foundLocal:
-//      debugPrint("found local: \(progress.asFound())")
+    case .foundLocal:
+      debugPrint("found local: \(progress.asFoundLocal())")
     case .found:
       debugPrint("found: \(progress.asFound())")
-//    case .foundHashSeq:
-//      debugPrint("found HashSeq: \(progress.asFound())")
+    case .foundHashSeq:
+      debugPrint("found HashSeq: \(progress.asFoundHashSeq())")
     case .progress:
       debugPrint("progress: \(progress.asProgress())")
     case .done:

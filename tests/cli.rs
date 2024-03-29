@@ -4,7 +4,7 @@ use std::{
     str::FromStr,
 };
 
-use iroh_net::ticket::BlobTicket;
+use iroh_base::ticket::BlobTicket;
 
 // binary path
 fn sendme_bin() -> &'static str {

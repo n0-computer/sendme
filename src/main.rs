@@ -288,7 +288,7 @@ async fn import(
     let progress = iroh_bytes::util::progress::FlumeProgressSender::new(send);
     let show_progress = tokio::spawn(show_ingest_progress(recv.into_stream()));
     // import all the files, using num_cpus workers, return names and temp tags
-    let names_and_tags = futures::stream::iter(data_sources)
+    let mut names_and_tags = futures::stream::iter(data_sources)
         .map(|(name, path)| {
             let db = db.clone();
             let progress = progress.clone();
@@ -305,6 +305,7 @@ async fn import(
         .into_iter()
         .collect::<anyhow::Result<Vec<_>>>()?;
     drop(progress);
+    names_and_tags.sort_by(|(a, _, _), (b, _, _)| a.cmp(b));
     // total size of all files
     let size = names_and_tags.iter().map(|(_, _, size)| *size).sum::<u64>();
     // collect the (name, hash) tuples into a collection

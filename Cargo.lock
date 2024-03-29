@@ -3254,7 +3254,7 @@ checksum = "92d43fe69e652f3df9bdc2b85b2854a0825b86e4fb76bc44d945137d053639ca"
 
 [[package]]
 name = "sendme"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "base32",

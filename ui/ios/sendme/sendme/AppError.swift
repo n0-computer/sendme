@@ -13,6 +13,7 @@ enum AppError: Error, Identifiable {
     
     case invalidTicket(String)
     case downloadFailed(String)
+    case createCollectionFailed(String)
 }
 
 extension AppError: LocalizedError {
@@ -21,6 +22,8 @@ extension AppError: LocalizedError {
         case .invalidTicket(let error):
           return NSLocalizedString(error, comment: "")
         case .downloadFailed(let error):
+          return NSLocalizedString(error, comment: "")
+        case .createCollectionFailed(let error):
           return NSLocalizedString(error, comment: "")
         }
     }
@@ -33,6 +36,8 @@ extension AppError {
       return NSLocalizedString("Invalid Ticket", comment: "")
     case .downloadFailed(_):
       return NSLocalizedString("Download Failed", comment: "")
+    case .createCollectionFailed(_):
+      return NSLocalizedString("Import Failed", comment: "")
     }
   }
 }

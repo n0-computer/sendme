@@ -18,6 +18,8 @@ iroh = "0.13.0"
 anyhow = "1.0.81"
 futures = "0.3.30"
 tokio = "1.36.0"
+walkdir = "2.5.0"
+num_cpus = "1.16.0"
 
 [features]
 # This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!

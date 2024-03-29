@@ -23,6 +23,9 @@
 		42C61F6C2BB3BEC200762786 /* DocumentPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42C61F6B2BB3BEC200762786 /* DocumentPicker.swift */; };
 		42C61F6E2BB3CEC500762786 /* ShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42C61F6D2BB3CEC500762786 /* ShareSheet.swift */; };
 		42C808FA2BB4948300114DC5 /* AppError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42C808F92BB4948300114DC5 /* AppError.swift */; };
+		42D5507D2BB5A3A2004F89FC /* ImageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42D5507C2BB5A3A2004F89FC /* ImageView.swift */; };
+		42D5507F2BB5E908004F89FC /* ProgressBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42D5507E2BB5E908004F89FC /* ProgressBarView.swift */; };
+		42D550812BB5F1F6004F89FC /* util.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42D550802BB5F1F6004F89FC /* util.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -60,6 +63,9 @@
 		42C61F6B2BB3BEC200762786 /* DocumentPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentPicker.swift; sourceTree = "<group>"; };
 		42C61F6D2BB3CEC500762786 /* ShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareSheet.swift; sourceTree = "<group>"; };
 		42C808F92BB4948300114DC5 /* AppError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppError.swift; sourceTree = "<group>"; };
+		42D5507C2BB5A3A2004F89FC /* ImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageView.swift; sourceTree = "<group>"; };
+		42D5507E2BB5E908004F89FC /* ProgressBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressBarView.swift; sourceTree = "<group>"; };
+		42D550802BB5F1F6004F89FC /* util.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = util.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -124,6 +130,9 @@
 				42C61F6B2BB3BEC200762786 /* DocumentPicker.swift */,
 				42C61F6D2BB3CEC500762786 /* ShareSheet.swift */,
 				42C808F92BB4948300114DC5 /* AppError.swift */,
+				42D5507C2BB5A3A2004F89FC /* ImageView.swift */,
+				42D5507E2BB5E908004F89FC /* ProgressBarView.swift */,
+				42D550802BB5F1F6004F89FC /* util.swift */,
 			);
 			path = sendme;
 			sourceTree = "<group>";
@@ -304,9 +313,12 @@
 				4235A9C52BB306190013D818 /* ContentView.swift in Sources */,
 				42C61F662BB3A82A00762786 /* Receive.swift in Sources */,
 				42C808FA2BB4948300114DC5 /* AppError.swift in Sources */,
+				42D550812BB5F1F6004F89FC /* util.swift in Sources */,
 				4235A9C32BB306190013D818 /* sendmeApp.swift in Sources */,
+				42D5507D2BB5A3A2004F89FC /* ImageView.swift in Sources */,
 				42C61F6C2BB3BEC200762786 /* DocumentPicker.swift in Sources */,
 				42C61F6E2BB3CEC500762786 /* ShareSheet.swift in Sources */,
+				42D5507F2BB5E908004F89FC /* ProgressBarView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

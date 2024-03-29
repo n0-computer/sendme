@@ -1,59 +1,63 @@
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/tauri";
-import { listen } from '@tauri-apps/api/event'
-import QRCode from "react-qr-code";
+import { useState } from "react";
+import { Tab } from "@headlessui/react"
+import classNames from "classnames";
 
+import Send from './Send'
+import Receive from './Receive'
 import "./App.css";
-import FileUpload from "./FileUpload";
+
+enum Mode {
+  Send,
+  Receive,
+}
 
 function App() {
-  const [ticket, setTicket] = useState("");
-  const [files, setFiles] = useState<FileList | null>(null)
-
-  useEffect(() => {
-    listen("tauri://file-drop", (event) => {
-      setFiles(event.payload as FileList)
-    });
-  }, [listen]);
-
-  async function get_ticket() {
-    // Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
-    const result: string = await invoke("send", { files });
-    console.log(result);
-    setTicket(result);
-  }
-
-  if (ticket === "") {
-    return (
-      <div className="max-w-xl max-h-xl mx-auto my-20 p-20">
-        <FileUpload 
-          files={files}
-          onChange={(files) => {
-            console.log("chose files", files);
-            setFiles(files);
-          }}
-        />
-        <button
-          className="mt-4 px-4 py-2 bg-blue-500 text-white rounded-lg"
-          onClick={get_ticket}>
-          Get Ticket
-        </button>
-      </div>
-    );
-  }
-
+  const [mode, setMode] = useState<Mode>(Mode.Send);
+  
   return (
-    <div className="max-w-xl max-h-xl mx-auto my-20 p-20">
-      <QRCode
-        value={ticket}
-        size={256}
-        style={{
-          height: "auto",
-          maxWidth: "100%",
-          width: "100%",
-          margin: "auto",
+    <div className="max-w-xl max-h-xl mx-auto mt-10">
+      <Tab.Group
+        onChange={(i) => {
+          setMode(i === 0 ? Mode.Send : Mode.Receive)
         }}
-      />
+      >
+        <Tab.List className='flex space-x-1 p-1'>
+          <Tab
+            className={({ selected }) =>
+                classNames(
+                  "w-full rounded-lg py-2.5 text-sm font-medium leading-5 text-irohPurple-500",
+                  "ring-white/60 ring-offset-2 ring-offset-irohPurple-400 focus:outline-none focus:ring-2",
+                  selected
+                    ? "bg-white dark:bg-zinc-800 shadow"
+                    : "text-irohPurple-100 hover:bg-white/[0.12] hover:text-irohPurple-200",
+                )
+              }
+          >
+            Send
+          </Tab>
+          <Tab
+            className={({ selected }) =>
+            classNames(
+              "w-full rounded-lg py-2.5 text-sm font-medium leading-5 text-irohPurple-500",
+              "ring-white/60 ring-offset-2 ring-offset-irohPurple-400 focus:outline-none focus:ring-2",
+              selected
+                ? "bg-white dark:bg-zinc-800 shadow"
+                : "text-irohPurple-100 hover:bg-white/[0.12] hover:text-irohPurple-200",
+            )
+          }
+          >
+            Receive
+          </Tab>
+        </Tab.List>
+        <Tab.Panels>
+          <Tab.Panel>
+            {mode === Mode.Send ? <Send /> : null}
+          </Tab.Panel>
+          <Tab.Panel>
+            {mode === Mode.Receive ? <Receive /> : null}
+          </Tab.Panel>
+        </Tab.Panels>
+      </Tab.Group>
     </div>
   );
 }

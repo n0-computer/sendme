@@ -54,7 +54,7 @@ struct Send: View {
               print("created collection \(collection)")
               
               let res = try node.blobsCreateCollection(collection: collection, tag: SetTagOption.auto(), tagsToDelete: tagsToDelete)
-              ticket = try node.blobsShare(hash: res.hash, blobFormat: BlobFormat.hashSeq)
+              ticket = try node.blobsShare(hash: res.hash, blobFormat: BlobFormat.hashSeq, ticketOptions: ShareTicketOptions.relayAndAddresses)
               print("generated collection ticket: \(ticket)")
               self.showingDocumentPicker = false
               

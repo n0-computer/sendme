@@ -618,7 +618,7 @@ fn show_get_error(e: anyhow::Error) -> anyhow::Error {
     e
 }
 
-async fn get(args: ReceiveArgs) -> anyhow::Result<()> {
+async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     let ticket = args.ticket;
     let addr = ticket.node_addr().clone();
     let secret_key = get_or_create_secret(args.common.verbose > 0)?;
@@ -714,7 +714,7 @@ async fn main() -> anyhow::Result<()> {
     };
     let res = match args.command {
         Commands::Send(args) => send(args).await,
-        Commands::Receive(args) => get(args).await,
+        Commands::Receive(args) => receive(args).await,
     };
     match res {
         Ok(()) => std::process::exit(0),

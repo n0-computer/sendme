@@ -5,7 +5,8 @@ use clap::{
     CommandFactory, Parser, Subcommand,
 };
 use console::style;
-use futures::{future, FutureExt, Stream, StreamExt};
+use futures_buffered::BufferedStreamExt;
+use futures_lite::{future::Boxed, Stream, StreamExt};
 use indicatif::{
     HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
 };
@@ -290,7 +291,7 @@ async fn import(
     let progress = iroh_bytes::util::progress::FlumeProgressSender::new(send);
     let show_progress = tokio::spawn(show_ingest_progress(recv.into_stream()));
     // import all the files, using num_cpus workers, return names and temp tags
-    let mut names_and_tags = futures::stream::iter(data_sources)
+    let mut names_and_tags = futures_lite::stream::iter(data_sources)
         .map(|(name, path)| {
             let db = db.clone();
             let progress = progress.clone();
@@ -301,7 +302,7 @@ async fn import(
                 anyhow::Ok((name, temp_tag, file_size))
             }
         })
-        .buffer_unordered(num_cpus::get())
+        .buffered_unordered(num_cpus::get())
         .collect::<Vec<_>>()
         .await
         .into_iter()
@@ -399,7 +400,7 @@ impl Drop for ClientStatus {
 }
 
 impl EventSender for ClientStatus {
-    fn send(&self, event: iroh_bytes::provider::Event) -> futures::prelude::future::BoxFuture<()> {
+    fn send(&self, event: iroh_bytes::provider::Event) -> Boxed<()> {
         tracing::info!("{:?}", event);
         let msg = match event {
             provider::Event::ClientConnected { connection_id } => {
@@ -436,7 +437,7 @@ impl EventSender for ClientStatus {
         if let Some(msg) = msg {
             self.current.set_message(msg);
         }
-        future::ready(()).boxed()
+        Box::pin(std::future::ready(()))
     }
 }
 

@@ -33,6 +33,7 @@ use std::{
 };
 use tokio_util::task::LocalPoolHandle;
 use walkdir::WalkDir;
+
 /// Send a file or directory between two machines, using blake3 verified streaming.
 ///
 /// For all subcommands, you can specify a secret key using the IROH_SECRET
@@ -41,6 +42,7 @@ use walkdir::WalkDir;
 /// You can also specify a port for the magicsocket. If you don't, a random one
 /// will be chosen.
 #[derive(Parser, Debug)]
+#[command(version, about)]
 pub struct Args {
     #[clap(subcommand)]
     pub command: Commands,

@@ -1668,9 +1668,9 @@ checksum = "8f518f335dce6725a761382244631d86cf0ccb2863413590b31338feb467f9c3"
 
 [[package]]
 name = "iroh-base"
-version = "0.14.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c0c1eaa6a47a6dcc7f52fb58bc6dcb9c96c3381a1dac46db003c833249c8e0a"
+checksum = "8b4ff15b3a7bbecfa19396dfd6af7d20e02e60dd817e13b617dfc79d43188997"
 dependencies = [
  "aead",
  "anyhow",
@@ -1709,9 +1709,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-bytes"
-version = "0.14.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a588258abd0cb8afa5adc8b0ca46b1801221895b4b068d48833cd2eb79e98ea9"
+checksum = "59af27b96708e0d61d8d877e0befae67065700032b2a05595b297309bfe6c043"
 dependencies = [
  "anyhow",
  "bao-tree",
@@ -1719,8 +1719,8 @@ dependencies = [
  "chrono",
  "derive_more",
  "flume",
- "futures",
  "futures-buffered",
+ "futures-lite",
  "genawaiter",
  "hex",
  "iroh-base",
@@ -1759,9 +1759,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-metrics"
-version = "0.14.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e0d3409829afc0ef7ee096eba85fec82b28c269b73b3485d92c292071fd9c8b"
+checksum = "6196daef67717a1cc8598eef64939525f7ccecc8d6692b3283086771121d9226"
 dependencies = [
  "anyhow",
  "erased_set",
@@ -1780,9 +1780,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-net"
-version = "0.14.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f67d1d6791cd28feccacf1d57ee27dc07bd072f793839a19565f1a98aa9e851c"
+checksum = "824cb1b5c624d3e0179b4a23deaca80a8717608aeada5983ca17f139627ab7d9"
 dependencies = [
  "aead",
  "anyhow",
@@ -1793,7 +1793,10 @@ dependencies = [
  "derive_more",
  "duct",
  "flume",
- "futures",
+ "futures-buffered",
+ "futures-lite",
+ "futures-sink",
+ "futures-util",
  "governor",
  "hex",
  "hickory-proto",
@@ -3169,9 +3172,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.21.10"
+version = "0.21.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9d5a6813c0759e4609cd494e8e725babae6a2ca7b62a5536a13daaec6fcb7ba"
+checksum = "3f56a14d1f48b391359b22f731fd4bd7e43c97f3c50eee276f3aa09c94784d3e"
 dependencies = [
  "log",
  "ring 0.17.8",
@@ -3316,7 +3319,7 @@ checksum = "92d43fe69e652f3df9bdc2b85b2854a0825b86e4fb76bc44d945137d053639ca"
 
 [[package]]
 name = "sendme"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "base32",

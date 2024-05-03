@@ -21,7 +21,13 @@ use iroh_bytes::{
     store::{ExportMode, ImportMode, ImportProgress},
     BlobFormat, Hash, HashAndFormat, TempTag,
 };
-use iroh_net::{key::SecretKey, MagicEndpoint};
+use iroh_net::{
+    discovery::{
+        dns::DnsDiscovery, pkarr_publish::PkarrPublisher,
+    },
+    key::SecretKey,
+    MagicEndpoint,
+};
 use rand::Rng;
 use std::{
     collections::BTreeMap,
@@ -440,10 +446,12 @@ impl EventSender for ClientStatus {
 
 async fn send(args: SendArgs) -> anyhow::Result<()> {
     let secret_key = get_or_create_secret(args.common.verbose > 0)?;
+    let discovery = Box::new(PkarrPublisher::n0_dns(secret_key.clone()));
     // create a magicsocket endpoint
     let endpoint_fut = MagicEndpoint::builder()
         .alpns(vec![iroh_bytes::protocol::ALPN.to_vec()])
         .secret_key(secret_key)
+        .discovery(discovery)
         .bind(args.common.magic_port);
     // use a flat store - todo: use a partial in mem store instead
     let suffix = rand::thread_rng().gen::<[u8; 16]>();
@@ -622,9 +630,11 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     let ticket = args.ticket;
     let addr = ticket.node_addr().clone();
     let secret_key = get_or_create_secret(args.common.verbose > 0)?;
+    let discovery = Box::new(DnsDiscovery::n0_dns());
     let endpoint = MagicEndpoint::builder()
         .alpns(vec![])
         .secret_key(secret_key)
+        .discovery(discovery)
         .bind(args.common.magic_port)
         .await?;
     let dir_name = format!(".sendme-get-{}", ticket.hash().to_hex());

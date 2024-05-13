@@ -11,7 +11,7 @@ use indicatif::{
     HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
 };
 use iroh_base::ticket::BlobTicket;
-use iroh_bytes::{
+use iroh_blobs::{
     format::collection::Collection,
     get::{
         db::DownloadProgress,
@@ -264,7 +264,7 @@ pub async fn show_ingest_progress(
 /// directory.
 async fn import(
     path: PathBuf,
-    db: impl iroh_bytes::store::Store,
+    db: impl iroh_blobs::store::Store,
 ) -> anyhow::Result<(TempTag, u64, Collection)> {
     let path = path.canonicalize()?;
     anyhow::ensure!(path.exists(), "path {} does not exist", path.display());
@@ -288,7 +288,7 @@ async fn import(
         .filter_map(Result::transpose)
         .collect::<anyhow::Result<Vec<_>>>()?;
     let (send, recv) = flume::bounded(32);
-    let progress = iroh_bytes::util::progress::FlumeProgressSender::new(send);
+    let progress = iroh_blobs::util::progress::FlumeProgressSender::new(send);
     let show_progress = tokio::spawn(show_ingest_progress(recv.into_stream()));
     // import all the files, using num_cpus workers, return names and temp tags
     let mut names_and_tags = futures_lite::stream::iter(data_sources)
@@ -335,7 +335,7 @@ fn get_export_path(root: &Path, name: &str) -> anyhow::Result<PathBuf> {
     Ok(path)
 }
 
-async fn export(db: impl iroh_bytes::store::Store, collection: Collection) -> anyhow::Result<()> {
+async fn export(db: impl iroh_blobs::store::Store, collection: Collection) -> anyhow::Result<()> {
     let root = std::env::current_dir()?;
     for (name, hash) in collection.iter() {
         let target = get_export_path(&root, name)?;
@@ -400,7 +400,7 @@ impl Drop for ClientStatus {
 }
 
 impl EventSender for ClientStatus {
-    fn send(&self, event: iroh_bytes::provider::Event) -> Boxed<()> {
+    fn send(&self, event: iroh_blobs::provider::Event) -> Boxed<()> {
         tracing::info!("{:?}", event);
         let msg = match event {
             provider::Event::ClientConnected { connection_id } => {
@@ -445,7 +445,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     let secret_key = get_or_create_secret(args.common.verbose > 0)?;
     // create a magicsocket endpoint
     let endpoint_fut = MagicEndpoint::builder()
-        .alpns(vec![iroh_bytes::protocol::ALPN.to_vec()])
+        .alpns(vec![iroh_blobs::protocol::ALPN.to_vec()])
         .secret_key(secret_key)
         .bind(args.common.magic_port);
     // use a flat store - todo: use a partial in mem store instead
@@ -465,7 +465,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         anyhow::Ok(())
     });
     std::fs::create_dir_all(&iroh_data_dir)?;
-    let db = iroh_bytes::store::fs::Store::load(&iroh_data_dir).await?;
+    let db = iroh_blobs::store::fs::Store::load(&iroh_data_dir).await?;
     let path = args.path;
     let (temp_tag, size, collection) = import(path.clone(), db.clone()).await?;
     let hash = *temp_tag.hash();
@@ -503,7 +503,8 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         let db = db.clone();
         let rt = rt.clone();
         let ps = ps.clone();
-        tokio::spawn(handle_connection(connecting, db, ps.new_client(), rt));
+        let connection = connecting.await?;
+        tokio::spawn(handle_connection(connection, db, ps.new_client(), rt));
     }
     drop(temp_tag);
     std::fs::remove_dir_all(iroh_data_dir)?;
@@ -632,20 +633,20 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
         .await?;
     let dir_name = format!(".sendme-get-{}", ticket.hash().to_hex());
     let iroh_data_dir = std::env::current_dir()?.join(dir_name);
-    let db = iroh_bytes::store::fs::Store::load(&iroh_data_dir).await?;
+    let db = iroh_blobs::store::fs::Store::load(&iroh_data_dir).await?;
     let mp = MultiProgress::new();
     let connect_progress = mp.add(ProgressBar::hidden());
     connect_progress.set_draw_target(ProgressDrawTarget::stderr());
     connect_progress.set_style(ProgressStyle::default_spinner());
     connect_progress.set_message(format!("connecting to {}", addr.node_id));
-    let connection = endpoint.connect(addr, iroh_bytes::protocol::ALPN).await?;
+    let connection = endpoint.connect(addr, iroh_blobs::protocol::ALPN).await?;
     let hash_and_format = HashAndFormat {
         hash: ticket.hash(),
         format: ticket.format(),
     };
     connect_progress.finish_and_clear();
     let (send, recv) = flume::bounded(32);
-    let progress = iroh_bytes::util::progress::FlumeProgressSender::new(send);
+    let progress = iroh_blobs::util::progress::FlumeProgressSender::new(send);
     let (_hash_seq, sizes) =
         get_hash_seq_and_sizes(&connection, &hash_and_format.hash, 1024 * 1024 * 32)
             .await
@@ -669,7 +670,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     }
     let _task = tokio::spawn(show_download_progress(recv.into_stream(), total_size));
     let get_conn = || async move { Ok(connection) };
-    let stats = iroh_bytes::get::db::get_to_db(&db, get_conn, &hash_and_format, progress)
+    let stats = iroh_blobs::get::db::get_to_db(&db, get_conn, &hash_and_format, progress)
         .await
         .map_err(|e| show_get_error(anyhow::anyhow!(e)))?;
     let collection = Collection::load(&db, &hash_and_format.hash).await?;

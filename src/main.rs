@@ -22,7 +22,7 @@ use iroh_blobs::{
     store::{ExportMode, ImportMode, ImportProgress},
     BlobFormat, Hash, HashAndFormat, TempTag,
 };
-use iroh_net::{key::SecretKey, MagicEndpoint};
+use iroh_net::{key::SecretKey, Endpoint};
 use rand::Rng;
 use std::{
     collections::BTreeMap,
@@ -444,7 +444,7 @@ impl EventSender for ClientStatus {
 async fn send(args: SendArgs) -> anyhow::Result<()> {
     let secret_key = get_or_create_secret(args.common.verbose > 0)?;
     // create a magicsocket endpoint
-    let endpoint_fut = MagicEndpoint::builder()
+    let endpoint_fut = Endpoint::builder()
         .alpns(vec![iroh_blobs::protocol::ALPN.to_vec()])
         .secret_key(secret_key)
         .bind(args.common.magic_port);
@@ -626,7 +626,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     let ticket = args.ticket;
     let addr = ticket.node_addr().clone();
     let secret_key = get_or_create_secret(args.common.verbose > 0)?;
-    let endpoint = MagicEndpoint::builder()
+    let endpoint = Endpoint::builder()
         .alpns(vec![])
         .secret_key(secret_key)
         .bind(args.common.magic_port)

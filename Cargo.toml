@@ -20,10 +20,10 @@ futures-buffered = "0.2.4"
 futures-lite = "2.3.0"
 hex = "0.4.3"
 indicatif = "0.17.7"
-iroh-base= { version = "0.16" }
-iroh-blobs = { version = "0.16" }
+iroh-base = { version = "0.17" }
+iroh-blobs = { version = "0.17" }
 iroh-io = "0.6.0"
-iroh-net = { version = "0.16" }
+iroh-net = { version = "0.17" }
 num_cpus = "1.16.0"
 rand = "0.8.5"
 tokio = { version = "1.34.0", features = ["full"] }

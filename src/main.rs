@@ -673,7 +673,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     let stats = iroh_blobs::get::db::get_to_db(&db, get_conn, &hash_and_format, progress)
         .await
         .map_err(|e| show_get_error(anyhow::anyhow!(e)))?;
-    let collection = Collection::load(&db, &hash_and_format.hash).await?;
+    let collection = Collection::load_db(&db, &hash_and_format.hash).await?;
     if args.common.verbose > 0 {
         for (name, hash) in collection.iter() {
             println!("    {} {name}", print_hash(hash, args.common.format));

@@ -112,15 +112,55 @@ pub struct CommonArgs {
     #[clap(short = 'v', long, action = clap::ArgAction::Count)]
     pub verbose: u8,
 
-    /// The relay URL to use as a home relay.
+    /// The relay URL to use as a home relay,
     ///
-    /// If not set, sendme will use the default relay set from number 0.
-    #[clap(long)]
-    pub relay: Option<String>,
+    /// Can be set to "disable" to disable relay servers and "default"
+    /// to configure default servers.
+    #[clap(long, default_value_t = RelayModeOption::Default)]
+    pub relay: RelayModeOption,
+}
 
-    /// Whether to turn off using relays completely.
-    #[clap(long, action = clap::ArgAction::SetTrue)]
-    pub no_relay: bool,
+/// Available command line options for configuring relays.
+#[derive(Clone, Debug)]
+pub enum RelayModeOption {
+    /// Disables relays altogether.
+    Disabled,
+    /// Uses the default relay servers.
+    Default,
+    /// Uses a single, custom relay server by URL.
+    Custom(RelayUrl),
+}
+
+impl FromStr for RelayModeOption {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "disabled" => Ok(Self::Disabled),
+            "default" => Ok(Self::Default),
+            _ => Ok(Self::Custom(RelayUrl::from_str(s)?)),
+        }
+    }
+}
+
+impl Display for RelayModeOption {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Disabled => f.write_str("disabled"),
+            Self::Default => f.write_str("default"),
+            Self::Custom(url) => url.fmt(f),
+        }
+    }
+}
+
+impl From<RelayModeOption> for RelayMode {
+    fn from(value: RelayModeOption) -> Self {
+        match value {
+            RelayModeOption::Disabled => RelayMode::Disabled,
+            RelayModeOption::Default => RelayMode::Default,
+            RelayModeOption::Custom(url) => RelayMode::Custom(RelayMap::from_url(url)),
+        }
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -149,19 +189,6 @@ pub struct ReceiveArgs {
 
     #[clap(flatten)]
     pub common: CommonArgs,
-}
-
-impl CommonArgs {
-    /// Parses the --no-relay and --relay options to determine what `RelayMode` to use
-    fn relay_mode(&self) -> anyhow::Result<RelayMode> {
-        Ok(if self.no_relay {
-            RelayMode::Disabled
-        } else if let Some(relay_url) = &self.relay {
-            RelayMode::Custom(RelayMap::from_url(RelayUrl::from_str(relay_url)?))
-        } else {
-            RelayMode::Default
-        })
-    }
 }
 
 /// Get the secret key or generate a new one.
@@ -482,7 +509,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     let endpoint_fut = Endpoint::builder()
         .alpns(vec![iroh_blobs::protocol::ALPN.to_vec()])
         .secret_key(secret_key)
-        .relay_mode(args.common.relay_mode()?)
+        .relay_mode(args.common.relay.into())
         .bind(args.common.magic_port);
     // use a flat store - todo: use a partial in mem store instead
     let suffix = rand::thread_rng().gen::<[u8; 16]>();
@@ -668,7 +695,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     let endpoint = Endpoint::builder()
         .alpns(vec![])
         .secret_key(secret_key)
-        .relay_mode(args.common.relay_mode()?)
+        .relay_mode(args.common.relay.into())
         .bind(args.common.magic_port)
         .await?;
     let dir_name = format!(".sendme-get-{}", ticket.hash().to_hex());

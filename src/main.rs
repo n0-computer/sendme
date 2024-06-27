@@ -10,7 +10,7 @@ use futures_lite::{future::Boxed, Stream, StreamExt};
 use indicatif::{
     HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
 };
-use iroh_base::ticket::BlobTicket;
+use iroh_base::{node_addr::AddrInfoOptions, ticket::BlobTicket};
 use iroh_blobs::{
     format::collection::Collection,
     get::{
@@ -22,7 +22,11 @@ use iroh_blobs::{
     store::{ExportMode, ImportMode, ImportProgress},
     BlobFormat, Hash, HashAndFormat, TempTag,
 };
-use iroh_net::{key::SecretKey, Endpoint};
+use iroh_net::{
+    key::SecretKey,
+    relay::{RelayMap, RelayMode, RelayUrl},
+    Endpoint,
+};
 use rand::Rng;
 use std::{
     collections::BTreeMap,
@@ -107,7 +111,58 @@ pub struct CommonArgs {
 
     #[clap(short = 'v', long, action = clap::ArgAction::Count)]
     pub verbose: u8,
+
+    /// The relay URL to use as a home relay,
+    ///
+    /// Can be set to "disable" to disable relay servers and "default"
+    /// to configure default servers.
+    #[clap(long, default_value_t = RelayModeOption::Default)]
+    pub relay: RelayModeOption,
 }
+
+/// Available command line options for configuring relays.
+#[derive(Clone, Debug)]
+pub enum RelayModeOption {
+    /// Disables relays altogether.
+    Disabled,
+    /// Uses the default relay servers.
+    Default,
+    /// Uses a single, custom relay server by URL.
+    Custom(RelayUrl),
+}
+
+impl FromStr for RelayModeOption {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "disabled" => Ok(Self::Disabled),
+            "default" => Ok(Self::Default),
+            _ => Ok(Self::Custom(RelayUrl::from_str(s)?)),
+        }
+    }
+}
+
+impl Display for RelayModeOption {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Disabled => f.write_str("disabled"),
+            Self::Default => f.write_str("default"),
+            Self::Custom(url) => url.fmt(f),
+        }
+    }
+}
+
+impl From<RelayModeOption> for RelayMode {
+    fn from(value: RelayModeOption) -> Self {
+        match value {
+            RelayModeOption::Disabled => RelayMode::Disabled,
+            RelayModeOption::Default => RelayMode::Default,
+            RelayModeOption::Custom(url) => RelayMode::Custom(RelayMap::from_url(url)),
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 pub struct SendArgs {
     /// Path to the file or directory to send.
@@ -115,6 +170,22 @@ pub struct SendArgs {
     /// The last component of the path will be used as the name of the data
     /// being shared.
     pub path: PathBuf,
+
+    /// What type of ticket to use.
+    ///
+    /// Use "id" for the shortest type only including the node ID,
+    /// "addresses" to only add IP addresses without a relay url,
+    /// "relay" to only add a relay address, and leave the option out
+    /// to use the biggest type of ticket that includes both relay and
+    /// address information.
+    ///
+    /// Generally, the more information the higher the likelyhood of
+    /// a successful connection, but also the bigger a ticket to connect.
+    ///
+    /// This is most useful for debugging which methods of connection
+    /// establishment work well.
+    #[clap(long, default_value_t = AddrInfoOptions::RelayAndAddresses)]
+    pub ticket_type: AddrInfoOptions,
 
     #[clap(flatten)]
     pub common: CommonArgs,
@@ -447,6 +518,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     let endpoint_fut = Endpoint::builder()
         .alpns(vec![iroh_blobs::protocol::ALPN.to_vec()])
         .secret_key(secret_key)
+        .relay_mode(args.common.relay.into())
         .bind(args.common.magic_port);
     // use a flat store - todo: use a partial in mem store instead
     let suffix = rand::thread_rng().gen::<[u8; 16]>();
@@ -476,7 +548,8 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     // make a ticket
-    let addr = endpoint.node_addr().await?;
+    let mut addr = endpoint.node_addr().await?;
+    addr.apply_options(args.ticket_type);
     let ticket = BlobTicket::new(addr, hash, BlobFormat::HashSeq)?;
     let entry_type = if path.is_file() { "file" } else { "directory" };
     println!(
@@ -629,6 +702,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     let endpoint = Endpoint::builder()
         .alpns(vec![])
         .secret_key(secret_key)
+        .relay_mode(args.common.relay.into())
         .bind(args.common.magic_port)
         .await?;
     let dir_name = format!(".sendme-get-{}", ticket.hash().to_hex());

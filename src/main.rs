@@ -10,7 +10,7 @@ use futures_lite::{future::Boxed, Stream, StreamExt};
 use indicatif::{
     HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
 };
-use iroh_base::ticket::BlobTicket;
+use iroh_base::{node_addr::AddrInfoOptions, ticket::BlobTicket};
 use iroh_blobs::{
     format::collection::Collection,
     get::{
@@ -171,12 +171,21 @@ pub struct SendArgs {
     /// being shared.
     pub path: PathBuf,
 
-    /// Whether to use a short ticket that doesn't contain information
-    /// about your IP addresses.
+    /// What type of ticket to use.
     ///
-    /// Useful if you want smaller tickets or want to test node discovery mechanisms.
-    #[clap(long, action = clap::ArgAction::SetTrue)]
-    pub short_ticket: bool,
+    /// Use "id" for the shortest type only including the node ID,
+    /// "addresses" to only add IP addresses without a relay url,
+    /// "relay" to only add a relay address, and leave the option out
+    /// to use the biggest type of ticket that includes both relay and
+    /// address information.
+    ///
+    /// Generally, the more information the higher the likelyhood of
+    /// a successful connection, but also the bigger a ticket to connect.
+    ///
+    /// This is most useful for debugging which methods of connection
+    /// establishment work well.
+    #[clap(long, default_value_t = AddrInfoOptions::RelayAndAddresses)]
+    pub ticket_type: AddrInfoOptions,
 
     #[clap(flatten)]
     pub common: CommonArgs,
@@ -540,9 +549,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     }
     // make a ticket
     let mut addr = endpoint.node_addr().await?;
-    if args.short_ticket {
-        addr.info.direct_addresses.clear();
-    }
+    addr.apply_options(args.ticket_type);
     let ticket = BlobTicket::new(addr, hash, BlobFormat::HashSeq)?;
     let entry_type = if path.is_file() { "file" } else { "directory" };
     println!(

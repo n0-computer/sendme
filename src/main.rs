@@ -472,11 +472,11 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     // wait for the endpoint to be ready
     let endpoint = endpoint_fut.await?;
     // wait for the endpoint to figure out its address before making a ticket
-    while endpoint.my_relay().is_none() {
+    while endpoint.home_relay().is_none() {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     // make a ticket
-    let addr = endpoint.my_addr().await?;
+    let addr = endpoint.node_addr().await?;
     let ticket = BlobTicket::new(addr, hash, BlobFormat::HashSeq)?;
     let entry_type = if path.is_file() { "file" } else { "directory" };
     println!(

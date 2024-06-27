@@ -22,7 +22,11 @@ use iroh_blobs::{
     store::{ExportMode, ImportMode, ImportProgress},
     BlobFormat, Hash, HashAndFormat, TempTag,
 };
-use iroh_net::{key::SecretKey, Endpoint};
+use iroh_net::{
+    key::SecretKey,
+    relay::{RelayMap, RelayMode, RelayUrl},
+    Endpoint,
+};
 use rand::Rng;
 use std::{
     collections::BTreeMap,
@@ -107,7 +111,18 @@ pub struct CommonArgs {
 
     #[clap(short = 'v', long, action = clap::ArgAction::Count)]
     pub verbose: u8,
+
+    /// The relay URL to use as a home relay.
+    ///
+    /// If not set, sendme will use the default relay set from number 0.
+    #[clap(long)]
+    pub relay: Option<String>,
+
+    /// Whether to turn off using relays completely.
+    #[clap(long, action = clap::ArgAction::SetTrue)]
+    pub no_relay: bool,
 }
+
 #[derive(Parser, Debug)]
 pub struct SendArgs {
     /// Path to the file or directory to send.
@@ -115,6 +130,13 @@ pub struct SendArgs {
     /// The last component of the path will be used as the name of the data
     /// being shared.
     pub path: PathBuf,
+
+    /// Whether to use a short ticket that doesn't contain information
+    /// about your IP addresses.
+    ///
+    /// Useful if you want smaller tickets or want to test node discovery mechanisms.
+    #[clap(long, action = clap::ArgAction::SetTrue)]
+    pub short_ticket: bool,
 
     #[clap(flatten)]
     pub common: CommonArgs,
@@ -127,6 +149,19 @@ pub struct ReceiveArgs {
 
     #[clap(flatten)]
     pub common: CommonArgs,
+}
+
+impl CommonArgs {
+    /// Parses the --no-relay and --relay options to determine what `RelayMode` to use
+    fn relay_mode(&self) -> anyhow::Result<RelayMode> {
+        Ok(if self.no_relay {
+            RelayMode::Disabled
+        } else if let Some(relay_url) = &self.relay {
+            RelayMode::Custom(RelayMap::from_url(RelayUrl::from_str(relay_url)?))
+        } else {
+            RelayMode::Default
+        })
+    }
 }
 
 /// Get the secret key or generate a new one.
@@ -447,6 +482,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     let endpoint_fut = Endpoint::builder()
         .alpns(vec![iroh_blobs::protocol::ALPN.to_vec()])
         .secret_key(secret_key)
+        .relay_mode(args.common.relay_mode()?)
         .bind(args.common.magic_port);
     // use a flat store - todo: use a partial in mem store instead
     let suffix = rand::thread_rng().gen::<[u8; 16]>();
@@ -476,7 +512,10 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     // make a ticket
-    let addr = endpoint.node_addr().await?;
+    let mut addr = endpoint.node_addr().await?;
+    if args.short_ticket {
+        addr.info.direct_addresses.clear();
+    }
     let ticket = BlobTicket::new(addr, hash, BlobFormat::HashSeq)?;
     let entry_type = if path.is_file() { "file" } else { "directory" };
     println!(
@@ -629,6 +668,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     let endpoint = Endpoint::builder()
         .alpns(vec![])
         .secret_key(secret_key)
+        .relay_mode(args.common.relay_mode()?)
         .bind(args.common.magic_port)
         .await?;
     let dir_name = format!(".sendme-get-{}", ticket.hash().to_hex());

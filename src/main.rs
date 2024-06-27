@@ -23,6 +23,7 @@ use iroh_blobs::{
     BlobFormat, Hash, HashAndFormat, TempTag,
 };
 use iroh_net::{
+    discovery::{dns::DnsDiscovery, pkarr_publish::PkarrPublisher, ConcurrentDiscovery, Discovery},
     key::SecretKey,
     relay::{RelayMap, RelayMode, RelayUrl},
     Endpoint,
@@ -514,11 +515,17 @@ impl EventSender for ClientStatus {
 
 async fn send(args: SendArgs) -> anyhow::Result<()> {
     let secret_key = get_or_create_secret(args.common.verbose > 0)?;
+    let discovery: Box<dyn Discovery> = if matches!(args.ticket_type, AddrInfoOptions::Id) {
+        Box::new(PkarrPublisher::n0_dns(secret_key.clone()))
+    } else {
+        Box::new(ConcurrentDiscovery::empty())
+    };
     // create a magicsocket endpoint
     let endpoint_fut = Endpoint::builder()
         .alpns(vec![iroh_blobs::protocol::ALPN.to_vec()])
         .secret_key(secret_key)
         .relay_mode(args.common.relay.into())
+        .discovery(discovery)
         .bind(args.common.magic_port);
     // use a flat store - todo: use a partial in mem store instead
     let suffix = rand::thread_rng().gen::<[u8; 16]>();
@@ -699,10 +706,12 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     let ticket = args.ticket;
     let addr = ticket.node_addr().clone();
     let secret_key = get_or_create_secret(args.common.verbose > 0)?;
+    let discovery = Box::new(DnsDiscovery::n0_dns());
     let endpoint = Endpoint::builder()
         .alpns(vec![])
         .secret_key(secret_key)
         .relay_mode(args.common.relay.into())
+        .discovery(discovery)
         .bind(args.common.magic_port)
         .await?;
     let dir_name = format!(".sendme-get-{}", ticket.hash().to_hex());

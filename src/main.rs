@@ -185,6 +185,11 @@ pub struct SendArgs {
     ///
     /// This is most useful for debugging which methods of connection
     /// establishment work well.
+    ///
+    /// If set to "id", this will enable publishing your node ID to IP
+    /// address mapping to number 0's DNS services, making it discoverable
+    /// by other peers.
+    /// In any other case this publishing is disabled.
     #[clap(long, default_value_t = AddrInfoOptions::RelayAndAddresses)]
     pub ticket_type: AddrInfoOptions,
 

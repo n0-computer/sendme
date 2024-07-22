@@ -20,14 +20,13 @@ futures-buffered = "0.2.4"
 futures-lite = "2.3.0"
 hex = "0.4.3"
 indicatif = "0.17.7"
-iroh-base = { version = "0.20" }
-iroh-blobs = { version = "0.20" }
+iroh-base = "0.21"
+iroh-blobs = "0.21"
 iroh-io = "0.6.0"
-iroh-net = { version = "0.20" }
+iroh-net = "0.21"
 num_cpus = "1.16.0"
 rand = "0.8.5"
 tokio = { version = "1.34.0", features = ["full"] }
-tokio-util = "0.7.10"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 walkdir = "2.4.0"

@@ -20,6 +20,7 @@ use iroh_blobs::{
     },
     provider::{self, handle_connection, EventSender},
     store::{ExportMode, ImportMode, ImportProgress},
+    util::local_pool::LocalPool,
     BlobFormat, Hash, HashAndFormat, TempTag,
 };
 use iroh_net::{
@@ -36,7 +37,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tokio_util::task::LocalPoolHandle;
 use walkdir::WalkDir;
 
 /// Send a file or directory between two machines, using blake3 verified streaming.
@@ -567,17 +567,17 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     println!("to get this data, use");
     println!("sendme receive {}", ticket);
     let ps = SendStatus::new();
-    let rt = LocalPoolHandle::new(1);
+    let lp = LocalPool::single();
     loop {
         let Some(connecting) = endpoint.accept().await else {
             tracing::info!("no more incoming connections, exiting");
             break;
         };
         let db = db.clone();
-        let rt = rt.clone();
+        let lph = lp.handle().clone();
         let ps = ps.clone();
         let connection = connecting.await?;
-        tokio::spawn(handle_connection(connection, db, ps.new_client(), rt));
+        tokio::spawn(handle_connection(connection, db, ps.new_client(), lph));
     }
     drop(temp_tag);
     std::fs::remove_dir_all(iroh_data_dir)?;

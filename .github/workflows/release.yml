@@ -36,6 +36,8 @@ on:
 
 env:
   BIN_NAME: sendme
+  IROH_FORCE_STAGING_RELAYS: "1"
+
 jobs:
   create-release:
     name: create-release

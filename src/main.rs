@@ -6,7 +6,7 @@ use clap::{
 };
 use console::style;
 use futures_buffered::BufferedStreamExt;
-use futures_lite::{future::Boxed, Stream, StreamExt};
+use futures_lite::{future::Boxed, StreamExt};
 use indicatif::{
     HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
 };
@@ -18,7 +18,7 @@ use iroh_blobs::{
         fsm::{AtBlobHeaderNextError, DecodeError},
         request::get_hash_seq_and_sizes,
     },
-    provider::{self, handle_connection, EventSender},
+    provider::{self, handle_connection, CustomEventSender, EventSender},
     store::{ExportMode, ImportMode, ImportProgress},
     util::local_pool::LocalPool,
     BlobFormat, Hash, HashAndFormat, TempTag,
@@ -270,7 +270,7 @@ pub fn canonicalized_path_to_string(
 }
 
 pub async fn show_ingest_progress(
-    mut stream: impl Stream<Item = ImportProgress> + Unpin,
+    recv: async_channel::Receiver<ImportProgress>,
 ) -> anyhow::Result<()> {
     let mp = MultiProgress::new();
     mp.set_draw_target(ProgressDrawTarget::stderr());
@@ -283,12 +283,13 @@ pub async fn show_ingest_progress(
     let mut names = BTreeMap::new();
     let mut sizes = BTreeMap::new();
     let mut pbs = BTreeMap::new();
-    while let Some(event) = stream.next().await {
+    loop {
+        let event = recv.recv().await;
         match event {
-            ImportProgress::Found { id, name } => {
+            Ok(ImportProgress::Found { id, name }) => {
                 names.insert(id, name);
             }
-            ImportProgress::Size { id, size } => {
+            Ok(ImportProgress::Size { id, size }) => {
                 sizes.insert(id, size);
                 let total_size = sizes.values().sum::<u64>();
                 op.set_message(format!(
@@ -306,19 +307,23 @@ pub async fn show_ingest_progress(
                 pb.set_length(size);
                 pbs.insert(id, pb);
             }
-            ImportProgress::OutboardProgress { id, offset } => {
+            Ok(ImportProgress::OutboardProgress { id, offset }) => {
                 if let Some(pb) = pbs.get(&id) {
                     pb.set_position(offset);
                 }
             }
-            ImportProgress::OutboardDone { id, .. } => {
+            Ok(ImportProgress::OutboardDone { id, .. }) => {
                 // you are not guaranteed to get any OutboardProgress
                 if let Some(pb) = pbs.remove(&id) {
                     pb.finish_and_clear();
                 }
             }
-            ImportProgress::CopyProgress { .. } => {
+            Ok(ImportProgress::CopyProgress { .. }) => {
                 // we are not copying anything
+            }
+            Err(e) => {
+                op.set_message(format!("Error receiving progress: {e}"));
+                break;
             }
         }
     }
@@ -358,9 +363,9 @@ async fn import(
         })
         .filter_map(Result::transpose)
         .collect::<anyhow::Result<Vec<_>>>()?;
-    let (send, recv) = flume::bounded(32);
-    let progress = iroh_blobs::util::progress::FlumeProgressSender::new(send);
-    let show_progress = tokio::spawn(show_ingest_progress(recv.into_stream()));
+    let (send, recv) = async_channel::bounded(32);
+    let progress = iroh_blobs::util::progress::AsyncChannelProgressSender::new(send);
+    let show_progress = tokio::spawn(show_ingest_progress(recv));
     // import all the files, using num_cpus workers, return names and temp tags
     let mut names_and_tags = futures_lite::stream::iter(data_sources)
         .map(|(name, path)| {
@@ -470,8 +475,13 @@ impl Drop for ClientStatus {
     }
 }
 
-impl EventSender for ClientStatus {
+impl CustomEventSender for ClientStatus {
     fn send(&self, event: iroh_blobs::provider::Event) -> Boxed<()> {
+        self.try_send(event);
+        Box::pin(std::future::ready(()))
+    }
+
+    fn try_send(&self, event: provider::Event) {
         tracing::info!("{:?}", event);
         let msg = match event {
             provider::Event::ClientConnected { connection_id } => {
@@ -508,7 +518,6 @@ impl EventSender for ClientStatus {
         if let Some(msg) = msg {
             self.current.set_message(msg);
         }
-        Box::pin(std::future::ready(()))
     }
 }
 
@@ -568,6 +577,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     println!("sendme receive {}", ticket);
     let ps = SendStatus::new();
     let lp = LocalPool::single();
+    let send_client = Arc::new(ps.new_client());
     loop {
         let Some(connecting) = endpoint.accept().await else {
             tracing::info!("no more incoming connections, exiting");
@@ -575,9 +585,14 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         };
         let db = db.clone();
         let lph = lp.handle().clone();
-        let ps = ps.clone();
+        let sc = send_client.clone();
         let connection = connecting.await?;
-        tokio::spawn(handle_connection(connection, db, ps.new_client(), lph));
+        tokio::spawn(handle_connection(
+            connection,
+            db,
+            EventSender::new(Some(sc)),
+            lph,
+        ));
     }
     drop(temp_tag);
     std::fs::remove_dir_all(iroh_data_dir)?;
@@ -598,7 +613,7 @@ fn make_download_progress() -> ProgressBar {
 }
 
 pub async fn show_download_progress(
-    mut stream: impl Stream<Item = DownloadProgress> + Unpin,
+    recv: async_channel::Receiver<DownloadProgress>,
     total_size: u64,
 ) -> anyhow::Result<()> {
     let mp = MultiProgress::new();
@@ -607,12 +622,13 @@ pub async fn show_download_progress(
     op.set_message(format!("{} Connecting ...\n", style("[1/3]").bold().dim()));
     let mut total_done = 0;
     let mut sizes = BTreeMap::new();
-    while let Some(x) = stream.next().await {
+    loop {
+        let x = recv.recv().await;
         match x {
-            DownloadProgress::Connected => {
+            Ok(DownloadProgress::Connected) => {
                 op.set_message(format!("{} Requesting ...\n", style("[2/3]").bold().dim()));
             }
-            DownloadProgress::FoundHashSeq { children, .. } => {
+            Ok(DownloadProgress::FoundHashSeq { children, .. }) => {
                 op.set_message(format!(
                     "{} Downloading {} blob(s)\n",
                     style("[3/3]").bold().dim(),
@@ -621,16 +637,16 @@ pub async fn show_download_progress(
                 op.set_length(total_size);
                 op.reset();
             }
-            DownloadProgress::Found { id, size, .. } => {
+            Ok(DownloadProgress::Found { id, size, .. }) => {
                 sizes.insert(id, size);
             }
-            DownloadProgress::Progress { offset, .. } => {
+            Ok(DownloadProgress::Progress { offset, .. }) => {
                 op.set_position(total_done + offset);
             }
-            DownloadProgress::Done { id } => {
+            Ok(DownloadProgress::Done { id }) => {
                 total_done += sizes.remove(&id).unwrap_or_default();
             }
-            DownloadProgress::AllDone(stats) => {
+            Ok(DownloadProgress::AllDone(stats)) => {
                 op.finish_and_clear();
                 eprintln!(
                     "Transferred {} in {}, {}/s",
@@ -640,8 +656,11 @@ pub async fn show_download_progress(
                 );
                 break;
             }
-            DownloadProgress::Abort(e) => {
-                anyhow::bail!("download aborted: {:?}", e);
+            Ok(DownloadProgress::Abort(e)) => {
+                anyhow::bail!("download aborted: {e:?}");
+            }
+            Err(e) => {
+                anyhow::bail!("error reading progress: {e:?}");
             }
             _ => {}
         }
@@ -719,8 +738,8 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
         format: ticket.format(),
     };
     connect_progress.finish_and_clear();
-    let (send, recv) = flume::bounded(32);
-    let progress = iroh_blobs::util::progress::FlumeProgressSender::new(send);
+    let (send, recv) = async_channel::bounded(32);
+    let progress = iroh_blobs::util::progress::AsyncChannelProgressSender::new(send);
     let (_hash_seq, sizes) =
         get_hash_seq_and_sizes(&connection, &hash_and_format.hash, 1024 * 1024 * 32)
             .await
@@ -742,7 +761,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
             HumanBytes(total_size)
         );
     }
-    let _task = tokio::spawn(show_download_progress(recv.into_stream(), total_size));
+    let _task = tokio::spawn(show_download_progress(recv, total_size));
     let get_conn = || async move { Ok(connection) };
     let stats = iroh_blobs::get::db::get_to_db(&db, get_conn, &hash_and_format, progress)
         .await

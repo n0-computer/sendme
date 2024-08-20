@@ -12,18 +12,18 @@ description = "A cli tool to send directories over the network, with NAT hole pu
 
 [dependencies]
 anyhow = "1.0.75"
+async-channel = "2.3.1"
 base32 = "0.5.0"
 clap = { version = "4.4.10", features = ["derive"] }
 console = "0.15.7"
-flume = "0.11.0"
 futures-buffered = "0.2.4"
 futures-lite = "2.3.0"
 hex = "0.4.3"
 indicatif = "0.17.7"
-iroh-base = "0.22"
-iroh-blobs = "0.22"
+iroh-base = "0.23"
+iroh-blobs = "0.23"
 iroh-io = "0.6.0"
-iroh-net = "0.22"
+iroh-net = "0.23"
 num_cpus = "1.16.0"
 rand = "0.8.5"
 tokio = { version = "1.34.0", features = ["full"] }

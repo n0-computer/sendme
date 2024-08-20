@@ -1680,8 +1680,9 @@ checksum = "8f518f335dce6725a761382244631d86cf0ccb2863413590b31338feb467f9c3"
 
 [[package]]
 name = "iroh-base"
-version = "0.22.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#217ac06b2128af9721ed6780a6bb2f0092a46ace"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8d60492b6099a5e94b674d0f4c564b3fa63a211836a090bc34c14d422721c19"
 dependencies = [
  "aead",
  "anyhow",
@@ -1721,8 +1722,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-blobs"
-version = "0.22.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#217ac06b2128af9721ed6780a6bb2f0092a46ace"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f44c07ea8e480ffe6b8d40dc029a73b68a312a6d021290d1afaaad8e332cc76b"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -1773,8 +1775,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-metrics"
-version = "0.22.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#217ac06b2128af9721ed6780a6bb2f0092a46ace"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0be681eb052594a43afa8d2d2cc093361917c7348c779df3fe92a7169bd2f9c5"
 dependencies = [
  "anyhow",
  "erased_set",
@@ -1793,8 +1796,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-net"
-version = "0.22.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#217ac06b2128af9721ed6780a6bb2f0092a46ace"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b18cd649ce3a342d8480038abee8170e483bc3bec8f111bf57ca9679c5075ce"
 dependencies = [
  "anyhow",
  "backoff",

@@ -1,6 +1,6 @@
 [package]
 name = "sendme"
-version = "0.14.0"
+version = "0.15.0"
 edition = "2021"
 authors = ["Rüdiger Klaehn <rklaehn@protonmail.com>", "n0 team"]
 keywords = ["scp", "sftp", "network", "p2p", "holepunching"]

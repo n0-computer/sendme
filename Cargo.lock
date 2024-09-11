@@ -481,6 +481,15 @@ dependencies = [
 name = "console"
 version = "0.15.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d16048cd947b08fa32c24458a22f5dc5e835264f689f4f5653210c69fd107363"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "console"
+version = "0.15.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e1f83fc076bd6dd27517eacdf25fef6c4dfe5f1d7448bafaaf3a26f13b5e4eb"
 dependencies = [
  "encode_unicode",
@@ -1054,6 +1063,17 @@ checksum = "91fa130f3777d0d4b0993653c20bc433026d3290627693c4ed1b18dd237357ab"
 dependencies = [
  "diatomic-waker",
  "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "futures-channel"
+version = "0.3.30"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de8419e65098e54c06f5ae8a130a79e8ba2e391ff995d260ca5d77ea72ab2fe3"
+dependencies = [
+ "futures-core",
+ "futures-util",
  "pin-project-lite",
 ]
 

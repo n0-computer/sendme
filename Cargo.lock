@@ -1682,8 +1682,9 @@ checksum = "187674a687eed5fe42285b40c6291f9a01517d415fad1c3cbc6a9f778af7fcd4"
 
 [[package]]
 name = "iroh-base"
-version = "0.24.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#9583729420a74dfd80cbcc88a9e23f4ddf7662d3"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "545424889bce87e44fd08dac9e6889635630fdbdaaa858a3c5a5f0adbb8d3779"
 dependencies = [
  "aead",
  "anyhow",
@@ -1723,8 +1724,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-blobs"
-version = "0.24.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#9583729420a74dfd80cbcc88a9e23f4ddf7662d3"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6ede5a40500cd76ff4d0ed48d206b036992b9f7aac0c1cc8d1977ef10c5da6a"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -1776,8 +1778,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-metrics"
-version = "0.24.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#9583729420a74dfd80cbcc88a9e23f4ddf7662d3"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9fb6ab80f7cccde80be07a643308e1ff925d5be91721ec65ba96b261a0bcb5e5"
 dependencies = [
  "anyhow",
  "erased_set",
@@ -1796,8 +1799,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-net"
-version = "0.24.0"
-source = "git+https://github.com/n0-computer/iroh?branch=main#9583729420a74dfd80cbcc88a9e23f4ddf7662d3"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a099a60478cb9319153756a9cf2ff41aa03d18403690a91e60f049ad467b057"
 dependencies = [
  "anyhow",
  "backoff",
@@ -2387,9 +2391,9 @@ dependencies = [
 
 [[package]]
 name = "once_cell"
-version = "1.20.0"
+version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33ea5043e58958ee56f3e15a90aee535795cd7dfd319846288d93c5b57d85cbe"
+checksum = "3fdb12b2476b595f9358c5161aa467c2438859caa136dec86c26fdd2efe17b92"
 
 [[package]]
 name = "oneshot"

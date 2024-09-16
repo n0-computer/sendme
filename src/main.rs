@@ -32,6 +32,7 @@ use rand::Rng;
 use std::{
     collections::BTreeMap,
     fmt::{Display, Formatter},
+    net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6},
     path::{Component, Path, PathBuf},
     str::FromStr,
     sync::Arc,
@@ -528,7 +529,18 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         .alpns(vec![iroh_blobs::protocol::ALPN.to_vec()])
         .secret_key(secret_key)
         .relay_mode(args.common.relay.into())
-        .bind(args.common.magic_port);
+        .bind_addr_v4(SocketAddrV4::new(
+            Ipv4Addr::UNSPECIFIED,
+            args.common.magic_port,
+        ))
+        .bind_addr_v6(SocketAddrV6::new(
+            Ipv6Addr::UNSPECIFIED,
+            args.common.magic_port + 1,
+            0,
+            0,
+        ))
+        .bind();
+
     // use a flat store - todo: use a partial in mem store instead
     let suffix = rand::thread_rng().gen::<[u8; 16]>();
     let iroh_data_dir =
@@ -722,7 +734,17 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
         .alpns(vec![])
         .secret_key(secret_key)
         .relay_mode(args.common.relay.into())
-        .bind(args.common.magic_port)
+        .bind_addr_v4(SocketAddrV4::new(
+            Ipv4Addr::UNSPECIFIED,
+            args.common.magic_port,
+        ))
+        .bind_addr_v6(SocketAddrV6::new(
+            Ipv6Addr::UNSPECIFIED,
+            args.common.magic_port + 1,
+            0,
+            0,
+        ))
+        .bind()
         .await?;
     let dir_name = format!(".sendme-get-{}", ticket.hash().to_hex());
     let iroh_data_dir = std::env::current_dir()?.join(dir_name);

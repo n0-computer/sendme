@@ -32,6 +32,7 @@ use rand::Rng;
 use std::{
     collections::BTreeMap,
     fmt::{Display, Formatter},
+    net::{SocketAddrV4, SocketAddrV6},
     path::{Component, Path, PathBuf},
     str::FromStr,
     sync::Arc,
@@ -99,12 +100,19 @@ pub enum Commands {
 
 #[derive(Parser, Debug)]
 pub struct CommonArgs {
-    /// The port for the magic socket to listen on.
+    /// The IPv4 address that magicsocket will listen on.
     ///
-    /// Defauls to a random free port, but it can be useful to specify a fixed
+    /// If None, defaults to a random free port, but it can be useful to specify a fixed
     /// port, e.g. to configure a firewall rule.
-    #[clap(long, default_value_t = 0)]
-    pub magic_port: u16,
+    #[clap(long, default_value = None)]
+    pub magic_ipv4_addr: Option<SocketAddrV4>,
+
+    /// The IPv6 address that magicsocket will listen on.
+    ///
+    /// If None, defaults to a random free port, but it can be useful to specify a fixed
+    /// port, e.g. to configure a firewall rule.
+    #[clap(long, default_value = None)]
+    pub magic_ipv6_addr: Option<SocketAddrV6>,
 
     #[clap(long, default_value_t = Format::Hex)]
     pub format: Format,
@@ -524,11 +532,17 @@ impl CustomEventSender for ClientStatus {
 async fn send(args: SendArgs) -> anyhow::Result<()> {
     let secret_key = get_or_create_secret(args.common.verbose > 0)?;
     // create a magicsocket endpoint
-    let endpoint_fut = Endpoint::builder()
+    let mut builder = Endpoint::builder()
         .alpns(vec![iroh_blobs::protocol::ALPN.to_vec()])
         .secret_key(secret_key)
-        .relay_mode(args.common.relay.into())
-        .bind(args.common.magic_port);
+        .relay_mode(args.common.relay.into());
+    if let Some(addr) = args.common.magic_ipv4_addr {
+        builder = builder.bind_addr_v4(addr);
+    }
+    if let Some(addr) = args.common.magic_ipv6_addr {
+        builder = builder.bind_addr_v6(addr);
+    }
+    let endpoint_fut = builder.bind();
     // use a flat store - todo: use a partial in mem store instead
     let suffix = rand::thread_rng().gen::<[u8; 16]>();
     let iroh_data_dir =
@@ -718,12 +732,18 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     let ticket = args.ticket;
     let addr = ticket.node_addr().clone();
     let secret_key = get_or_create_secret(args.common.verbose > 0)?;
-    let endpoint = Endpoint::builder()
+    let mut builder = Endpoint::builder()
         .alpns(vec![])
         .secret_key(secret_key)
-        .relay_mode(args.common.relay.into())
-        .bind(args.common.magic_port)
-        .await?;
+        .relay_mode(args.common.relay.into());
+
+    if let Some(addr) = args.common.magic_ipv4_addr {
+        builder = builder.bind_addr_v4(addr);
+    }
+    if let Some(addr) = args.common.magic_ipv6_addr {
+        builder = builder.bind_addr_v6(addr);
+    }
+    let endpoint = builder.bind().await?;
     let dir_name = format!(".sendme-get-{}", ticket.hash().to_hex());
     let iroh_data_dir = std::env::current_dir()?.join(dir_name);
     let db = iroh_blobs::store::fs::Store::load(&iroh_data_dir).await?;

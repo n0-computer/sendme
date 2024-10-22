@@ -63,38 +63,6 @@ jobs:
       - name: cargo test
         run: cargo test --locked --workspace --all-features --bins --tests --examples
 
-  test-release:
-    runs-on: ${{ matrix.target.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - os: "ubuntu-latest"
-            toolchain: "x86_64-unknown-linux-gnu"
-            name: "Linux GNU"
-          - os: "macOS-latest"
-            toolchain: "x86_64-apple-darwin"
-            name: "macOS"
-          - os: "windows-latest"
-            toolchain: "x86_64-pc-windows-msvc"
-            name: "Windows MSVC"
-          - os: "windows-latest"
-            toolchain: "x86_64-pc-windows-gnu"
-            name: "Windows GNU"
-        channel:
-          - "stable"
-          - "beta"
-          - "nightly"
-    steps:
-      - uses: actions/checkout@v2
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.channel }}
-          targets: ${{ matrix.target.toolchain }}
-      - uses: swatinem/rust-cache@v2
-      - name: cargo test
-        run: cargo test --release --locked --workspace --all-features --bins --tests --examples
-
   # Checks correct runtime deps and features are requested by not including dev-dependencies.
   check-deps:
     runs-on: ubuntu-latest
@@ -104,16 +72,3 @@ jobs:
       - uses: swatinem/rust-cache@v2
       - name: cargo check
         run: cargo check --workspace --all-features --bins
-
-  # Minimal crates needs adding proc-macro 1.0.66 as a dev dependency.
-  # Since it is not necessary for a bin project, disabled.
-  # minimal-crates:
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v2
-  #     - uses: dtolnay/rust-toolchain@nightly
-  #     - uses: swatinem/rust-cache@v2
-  #     - name: cargo check
-  #       run: |
-  #         rm -f Cargo.lock
-  #         cargo +nightly check -Z minimal-versions --workspace --all-features --bins

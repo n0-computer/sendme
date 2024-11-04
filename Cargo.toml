@@ -5,10 +5,10 @@ edition = "2021"
 authors = ["Rüdiger Klaehn <rklaehn@protonmail.com>", "n0 team"]
 keywords = ["scp", "sftp", "network", "p2p", "holepunching"]
 categories = ["network-programming"]
-license = "Apache-2.0/MIT"
-repository = "https://github.com/n0-computer/dumb-pipe"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/n0-computer/sendme"
 description = "A cli tool to send directories over the network, with NAT hole punching"
-
+readme = "README.md"
 
 [dependencies]
 anyhow = "1.0.75"

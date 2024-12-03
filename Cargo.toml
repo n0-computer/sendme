@@ -20,10 +20,9 @@ futures-buffered = "0.2.4"
 futures-lite = "2.3.0"
 hex = "0.4.3"
 indicatif = "0.17.7"
-iroh-base = "0.28"
-iroh-blobs = "0.28"
+iroh-blobs = { version = "0.28", features = ["net_protocol"] }
 iroh-io = "0.6"
-iroh-net = "0.28"
+iroh = "0.29"
 num_cpus = "1.16.0"
 rand = "0.8.5"
 tokio = { version = "1.34.0", features = ["full"] }
@@ -37,3 +36,6 @@ nix = { version = "0.29", features = ["signal", "process"] }
 rand = "0.8.5"
 serde_json = "1.0.108"
 tempfile = "3.8.1"
+
+[patch.crates-io]
+iroh-blobs = { git = "https://github.com/n0-computer/iroh-blobs", branch = "iroh-v0-29-0" }

@@ -575,9 +575,8 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     let hash = *temp_tag.hash();
 
     // wait for the endpoint to figure out its address before making a ticket
-    while router.endpoint().home_relay().is_none() {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
+    let _ = router.endpoint().watch_home_relay().next().await;
+
     // make a ticket
     let mut addr = router.endpoint().node_addr().await?;
     addr.apply_options(args.ticket_type);

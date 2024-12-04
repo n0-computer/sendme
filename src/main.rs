@@ -1,4 +1,15 @@
 //! Command line arguments.
+
+use std::{
+    collections::BTreeMap,
+    fmt::{Display, Formatter},
+    net::{SocketAddrV4, SocketAddrV6},
+    path::{Component, Path, PathBuf},
+    str::FromStr,
+    sync::Arc,
+    time::Duration,
+};
+
 use anyhow::Context;
 use clap::{
     error::{ContextKind, ErrorKind},
@@ -10,7 +21,9 @@ use futures_lite::{future::Boxed, StreamExt};
 use indicatif::{
     HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
 };
-use iroh_base::{node_addr::AddrInfoOptions, ticket::BlobTicket};
+use iroh::{
+    key::SecretKey, ticket::BlobTicket, AddrInfoOptions, Endpoint, RelayMap, RelayMode, RelayUrl,
+};
 use iroh_blobs::{
     format::collection::Collection,
     get::{
@@ -18,26 +31,13 @@ use iroh_blobs::{
         fsm::{AtBlobHeaderNextError, DecodeError},
         request::get_hash_seq_and_sizes,
     },
-    provider::{self, handle_connection, CustomEventSender, EventSender},
+    net_protocol::Blobs,
+    provider::{self, CustomEventSender},
     store::{ExportMode, ImportMode, ImportProgress},
     util::local_pool::LocalPool,
     BlobFormat, Hash, HashAndFormat, TempTag,
 };
-use iroh_net::{
-    key::SecretKey,
-    relay::{RelayMap, RelayMode, RelayUrl},
-    Endpoint,
-};
 use rand::Rng;
-use std::{
-    collections::BTreeMap,
-    fmt::{Display, Formatter},
-    net::{SocketAddrV4, SocketAddrV6},
-    path::{Component, Path, PathBuf},
-    str::FromStr,
-    sync::Arc,
-    time::Duration,
-};
 use walkdir::WalkDir;
 
 /// Send a file or directory between two machines, using blake3 verified streaming.
@@ -542,36 +542,43 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     if let Some(addr) = args.common.magic_ipv6_addr {
         builder = builder.bind_addr_v6(addr);
     }
-    let endpoint_fut = builder.bind();
+
     // use a flat store - todo: use a partial in mem store instead
     let suffix = rand::thread_rng().gen::<[u8; 16]>();
-    let iroh_data_dir =
-        std::env::current_dir()?.join(format!(".sendme-send-{}", hex::encode(suffix)));
-    if iroh_data_dir.exists() {
-        println!("can not share twice from the same directory");
+    let cwd = std::env::current_dir()?;
+    let blobs_data_dir = cwd.join(format!(".sendme-send-{}", hex::encode(suffix)));
+    if blobs_data_dir.exists() {
+        println!(
+            "can not share twice from the same directory: {}",
+            cwd.display(),
+        );
         std::process::exit(1);
     }
-    let iroh_data_dir_2 = iroh_data_dir.clone();
-    let _control_c = tokio::spawn(async move {
-        tokio::signal::ctrl_c().await?;
-        std::fs::remove_dir_all(iroh_data_dir_2)?;
-        std::process::exit(1);
-        #[allow(unreachable_code)]
-        anyhow::Ok(())
-    });
-    std::fs::create_dir_all(&iroh_data_dir)?;
-    let db = iroh_blobs::store::fs::Store::load(&iroh_data_dir).await?;
+
+    tokio::fs::create_dir_all(&blobs_data_dir).await?;
+
+    let endpoint = builder.bind().await?;
+    let lp = LocalPool::default();
+    let ps = SendStatus::new();
+    let blobs = Blobs::persistent(&blobs_data_dir)
+        .await?
+        .events(ps.new_client().into())
+        .build(lp.handle(), &endpoint);
+
+    let router = iroh::protocol::Router::builder(endpoint)
+        .accept(iroh_blobs::ALPN, blobs.clone())
+        .spawn()
+        .await?;
+
     let path = args.path;
-    let (temp_tag, size, collection) = import(path.clone(), db.clone()).await?;
+    let (temp_tag, size, collection) = import(path.clone(), blobs.store().clone()).await?;
     let hash = *temp_tag.hash();
-    // wait for the endpoint to be ready
-    let endpoint = endpoint_fut.await?;
+
     // wait for the endpoint to figure out its address before making a ticket
-    while endpoint.home_relay().is_none() {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
+    let _ = router.endpoint().watch_home_relay().next().await;
+
     // make a ticket
-    let mut addr = endpoint.node_addr().await?;
+    let mut addr = router.endpoint().node_addr().await?;
     addr.apply_options(args.ticket_type);
     let ticket = BlobTicket::new(addr, hash, BlobFormat::HashSeq)?;
     let entry_type = if path.is_file() { "file" } else { "directory" };
@@ -589,27 +596,16 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     }
     println!("to get this data, use");
     println!("sendme receive {}", ticket);
-    let ps = SendStatus::new();
-    let lp = LocalPool::single();
-    let send_client = Arc::new(ps.new_client());
-    loop {
-        let Some(connecting) = endpoint.accept().await else {
-            tracing::info!("no more incoming connections, exiting");
-            break;
-        };
-        let db = db.clone();
-        let lph = lp.handle().clone();
-        let sc = send_client.clone();
-        let connection = connecting.await?;
-        tokio::spawn(handle_connection(
-            connection,
-            db,
-            EventSender::new(Some(sc)),
-            lph,
-        ));
-    }
+
     drop(temp_tag);
-    std::fs::remove_dir_all(iroh_data_dir)?;
+
+    // Wait for exit
+    tokio::signal::ctrl_c().await?;
+
+    println!("shutting down");
+    tokio::time::timeout(Duration::from_secs(2), router.shutdown()).await??;
+    tokio::fs::remove_dir_all(blobs_data_dir).await?;
+
     Ok(())
 }
 
@@ -798,7 +794,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
         }
     }
     export(db, collection).await?;
-    std::fs::remove_dir_all(iroh_data_dir)?;
+    tokio::fs::remove_dir_all(iroh_data_dir).await?;
     if args.common.verbose > 0 {
         println!(
             "downloaded {} files, {}. took {} ({}/s)",

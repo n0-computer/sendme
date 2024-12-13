@@ -21,9 +21,7 @@ use futures_lite::{future::Boxed, StreamExt};
 use indicatif::{
     HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
 };
-use iroh::{
-    key::SecretKey, ticket::BlobTicket, AddrInfoOptions, Endpoint, RelayMap, RelayMode, RelayUrl,
-};
+use iroh::{Endpoint, RelayMap, RelayMode, RelayUrl, SecretKey};
 use iroh_blobs::{
     format::collection::Collection,
     get::{
@@ -34,6 +32,7 @@ use iroh_blobs::{
     net_protocol::Blobs,
     provider::{self, CustomEventSender},
     store::{ExportMode, ImportMode, ImportProgress},
+    ticket::BlobTicket,
     util::local_pool::LocalPool,
     BlobFormat, Hash, HashAndFormat, TempTag,
 };
@@ -167,6 +166,43 @@ impl From<RelayModeOption> for RelayMode {
             RelayModeOption::Disabled => RelayMode::Disabled,
             RelayModeOption::Default => RelayMode::Default,
             RelayModeOption::Custom(url) => RelayMode::Custom(RelayMap::from_url(url)),
+        }
+    }
+}
+
+/// Options to configure what is included in a [`NodeAddr`] and [`AddrInfo`].
+#[derive(
+    Copy, Clone, PartialEq, Eq, Default, Debug, derive_more::Display, derive_more::FromStr,
+)]
+
+pub enum AddrInfoOptions {
+    /// Only the Node ID is added.
+    ///
+    /// This usually means that iroh-dns discovery is used to find address information.
+    #[default]
+    Id,
+    /// Includes the Node ID and both the relay URL, and the direct addresses.
+    RelayAndAddresses,
+    /// Includes the Node ID and the relay URL.
+    Relay,
+    /// Includes the Node ID and the direct addresses.
+    Addresses,
+}
+
+impl AddrInfoOptions {
+    pub fn apply_to(&self, addr: &mut iroh::NodeAddr) {
+        match self {
+            AddrInfoOptions::RelayAndAddresses => {}
+            AddrInfoOptions::Relay => {
+                addr.direct_addresses = Default::default();
+            }
+            AddrInfoOptions::Addresses => {
+                addr.relay_url = None;
+            }
+            AddrInfoOptions::Id => {
+                addr.relay_url = None;
+                addr.direct_addresses = Default::default();
+            }
         }
     }
 }
@@ -579,7 +615,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
 
     // make a ticket
     let mut addr = router.endpoint().node_addr().await?;
-    addr.apply_options(args.ticket_type);
+    args.ticket_type.apply_to(&mut addr);
     let ticket = BlobTicket::new(addr, hash, BlobFormat::HashSeq)?;
     let entry_type = if path.is_file() { "file" } else { "directory" };
     println!(

@@ -16,14 +16,13 @@ use clap::{
     CommandFactory, Parser, Subcommand,
 };
 use console::style;
+use data_encoding::HEXLOWER;
 use futures_buffered::BufferedStreamExt;
 use futures_lite::{future::Boxed, StreamExt};
 use indicatif::{
     HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
 };
-use iroh::{
-    key::SecretKey, ticket::BlobTicket, AddrInfoOptions, Endpoint, RelayMap, RelayMode, RelayUrl,
-};
+use iroh::{Endpoint, NodeAddr, RelayMap, RelayMode, RelayUrl, SecretKey};
 use iroh_blobs::{
     format::collection::Collection,
     get::{
@@ -34,10 +33,12 @@ use iroh_blobs::{
     net_protocol::Blobs,
     provider::{self, CustomEventSender},
     store::{ExportMode, ImportMode, ImportProgress},
+    ticket::BlobTicket,
     util::local_pool::LocalPool,
     BlobFormat, Hash, HashAndFormat, TempTag,
 };
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 /// Send a file or directory between two machines, using blake3 verified streaming.
@@ -208,6 +209,51 @@ pub struct ReceiveArgs {
     pub common: CommonArgs,
 }
 
+/// Options to configure what is included in a [`NodeAddr`]
+#[derive(
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    Default,
+    Debug,
+    derive_more::Display,
+    derive_more::FromStr,
+    Serialize,
+    Deserialize,
+)]
+pub enum AddrInfoOptions {
+    /// Only the Node ID is added.
+    ///
+    /// This usually means that iroh-dns discovery is used to find address information.
+    #[default]
+    Id,
+    /// Includes the Node ID and both the relay URL, and the direct addresses.
+    RelayAndAddresses,
+    /// Includes the Node ID and the relay URL.
+    Relay,
+    /// Includes the Node ID and the direct addresses.
+    Addresses,
+}
+
+fn apply_options(addr: &mut NodeAddr, opts: AddrInfoOptions) {
+    match opts {
+        AddrInfoOptions::Id => {
+            addr.direct_addresses.clear();
+            addr.relay_url = None;
+        }
+        AddrInfoOptions::RelayAndAddresses => {
+            // nothing to do
+        }
+        AddrInfoOptions::Relay => {
+            addr.direct_addresses.clear();
+        }
+        AddrInfoOptions::Addresses => {
+            addr.relay_url = None;
+        }
+    }
+}
+
 /// Get the secret key or generate a new one.
 ///
 /// Print the secret key to stderr if it was generated, so the user can save it.
@@ -215,7 +261,7 @@ fn get_or_create_secret(print: bool) -> anyhow::Result<SecretKey> {
     match std::env::var("IROH_SECRET") {
         Ok(secret) => SecretKey::from_str(&secret).context("invalid secret"),
         Err(_) => {
-            let key = SecretKey::generate();
+            let key = SecretKey::generate(rand::rngs::OsRng);
             if print {
                 eprintln!("using secret key {}", key);
             }
@@ -546,7 +592,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     // use a flat store - todo: use a partial in mem store instead
     let suffix = rand::thread_rng().gen::<[u8; 16]>();
     let cwd = std::env::current_dir()?;
-    let blobs_data_dir = cwd.join(format!(".sendme-send-{}", hex::encode(suffix)));
+    let blobs_data_dir = cwd.join(format!(".sendme-send-{}", HEXLOWER.encode(&suffix)));
     if blobs_data_dir.exists() {
         println!(
             "can not share twice from the same directory: {}",
@@ -575,11 +621,11 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     let hash = *temp_tag.hash();
 
     // wait for the endpoint to figure out its address before making a ticket
-    let _ = router.endpoint().watch_home_relay().next().await;
+    let _ = router.endpoint().home_relay().initialized().await?;
 
     // make a ticket
     let mut addr = router.endpoint().node_addr().await?;
-    addr.apply_options(args.ticket_type);
+    apply_options(&mut addr, args.ticket_type);
     let ticket = BlobTicket::new(addr, hash, BlobFormat::HashSeq)?;
     let entry_type = if path.is_file() { "file" } else { "directory" };
     println!(

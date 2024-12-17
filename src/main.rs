@@ -16,6 +16,7 @@ use clap::{
     CommandFactory, Parser, Subcommand,
 };
 use console::style;
+use data_encoding::HEXLOWER;
 use futures_buffered::BufferedStreamExt;
 use futures_lite::{future::Boxed, StreamExt};
 use indicatif::{
@@ -591,7 +592,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     // use a flat store - todo: use a partial in mem store instead
     let suffix = rand::thread_rng().gen::<[u8; 16]>();
     let cwd = std::env::current_dir()?;
-    let blobs_data_dir = cwd.join(format!(".sendme-send-{}", hex::encode(suffix)));
+    let blobs_data_dir = cwd.join(format!(".sendme-send-{}", HEXLOWER.encode(&suffix)));
     if blobs_data_dir.exists() {
         println!(
             "can not share twice from the same directory: {}",

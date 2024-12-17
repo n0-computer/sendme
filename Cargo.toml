@@ -10,6 +10,9 @@ repository = "https://github.com/n0-computer/sendme"
 description = "A cli tool to send directories over the network, with NAT hole punching"
 readme = "README.md"
 
+# Sadly this also needs to be updated in .github/workflows/ci.yml
+rust-version = "1.81"
+
 [dependencies]
 anyhow = "1.0.75"
 async-channel = "2.3.1"

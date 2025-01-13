@@ -1,18 +1,18 @@
 # Sendme
 
-This is an example to use [iroh-bytes](https://crates.io/crates/iroh-bytes) and
-[iroh-net](https://crates.io/crates/iroh-net) to send files and directories over
-the internet.
+This is an example application using [iroh](https://crates.io/crates/iroh) with
+the [iroh-blobs](https://crates.io/crates/iroh-blobs) protocol to send files and
+directories over the internet.
 
 It is also useful as a standalone tool for quick copy jobs.
 
-Iroh-net will take case of hole punching and NAT traversal whenever possible,
+Iroh will take case of hole punching and NAT traversal whenever possible,
 and fall back to a relay if hole punching does not succeed.
 
-Iroh-bytes will take care of [blake3](https://crates.io/crates/blake3) verified
+Iroh-blobs will take care of [blake3](https://crates.io/crates/blake3) verified
 streaming, including resuming interrupted downloads.
 
-Sendme works with 256 bit node ids and therefore location transparent. A ticket
+Sendme works with 256 bit node ids and is therefore location transparent. A ticket
 will remain valid if the IP address changes. Connections are encrypted using
 TLS.
 

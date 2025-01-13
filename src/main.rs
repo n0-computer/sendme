@@ -22,7 +22,10 @@ use futures_lite::{future::Boxed, StreamExt};
 use indicatif::{
     HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
 };
-use iroh::{Endpoint, NodeAddr, RelayMap, RelayMode, RelayUrl, SecretKey};
+use iroh::{
+    discovery::{dns::DnsDiscovery, pkarr::PkarrPublisher},
+    Endpoint, NodeAddr, RelayMap, RelayMode, RelayUrl, SecretKey,
+};
 use iroh_blobs::{
     format::collection::Collection,
     get::{
@@ -582,6 +585,10 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         .alpns(vec![iroh_blobs::protocol::ALPN.to_vec()])
         .secret_key(secret_key)
         .relay_mode(args.common.relay.into());
+    if args.ticket_type == AddrInfoOptions::Id {
+        builder =
+            builder.add_discovery(|secret_key| Some(PkarrPublisher::n0_dns(secret_key.clone())));
+    }
     if let Some(addr) = args.common.magic_ipv4_addr {
         builder = builder.bind_addr_v4(addr);
     }
@@ -779,6 +786,9 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
         .secret_key(secret_key)
         .relay_mode(args.common.relay.into());
 
+    if ticket.node_addr().relay_url.is_none() && ticket.node_addr().direct_addresses.is_empty() {
+        builder = builder.add_discovery(|_| Some(DnsDiscovery::n0_dns()));
+    }
     if let Some(addr) = args.common.magic_ipv4_addr {
         builder = builder.bind_addr_v4(addr);
     }
@@ -875,6 +885,9 @@ async fn main() -> anyhow::Result<()> {
         Commands::Send(args) => send(args).await,
         Commands::Receive(args) => receive(args).await,
     };
+    if let Err(e) = &res {
+        eprintln!("{e}");
+    }
     match res {
         Ok(()) => std::process::exit(0),
         Err(_) => std::process::exit(1),

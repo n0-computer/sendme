@@ -239,9 +239,12 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b62ddb9cb1ec0a098ad4bbf9344d0713fa193ae1a80af55febcff2627b6a00c1"
 dependencies = [
+ "futures-core",
  "getrandom",
  "instant",
+ "pin-project-lite",
  "rand",
+ "tokio",
 ]
 
 [[package]]
@@ -266,7 +269,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1f7a89a8ee5889d2593ae422ce6e1bb03e48a0e8a16e4fa0882dfcbe7e182ef"
 dependencies = [
  "bytes",
- "futures-lite 2.5.0",
+ "futures-lite",
  "genawaiter",
  "iroh-blake3",
  "iroh-io",
@@ -948,15 +951,6 @@ checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
 
 [[package]]
 name = "fastrand"
-version = "1.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e51093e27b0797c359783294ca4f0a911c270184cb10f85783b118614a1501be"
-dependencies = [
- "instant",
-]
-
-[[package]]
-name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
@@ -966,12 +960,6 @@ name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
-
-[[package]]
-name = "fixedbitset"
-version = "0.5.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
 name = "flume"
@@ -1044,21 +1032,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "futures-concurrency"
-version = "7.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9b724496da7c26fcce66458526ce68fc2ecf4aaaa994281cf322ded5755520c"
-dependencies = [
- "fixedbitset",
- "futures-buffered",
- "futures-core",
- "futures-lite 1.13.0",
- "pin-project",
- "slab",
- "smallvec",
-]
-
-[[package]]
 name = "futures-core"
 version = "0.3.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1083,26 +1056,11 @@ checksum = "9e5c1b78ca4aae1ac06c48a526a655760685149f0d465d21f37abfe57ce075c6"
 
 [[package]]
 name = "futures-lite"
-version = "1.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49a9d51ce47660b1e808d3c990b4709f2f415d928835a17dfd16991515c46bce"
-dependencies = [
- "fastrand 1.9.0",
- "futures-core",
- "futures-io",
- "memchr",
- "parking",
- "pin-project-lite",
- "waker-fn",
-]
-
-[[package]]
-name = "futures-lite"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cef40d21ae2c515b51041df9ed313ed21e572df340ea58a922a0aefe7e8891a1"
 dependencies = [
- "fastrand 2.3.0",
+ "fastrand",
  "futures-core",
  "futures-io",
  "parking",
@@ -1403,17 +1361,6 @@ dependencies = [
  "libc",
  "match_cfg",
  "winapi",
-]
-
-[[package]]
-name = "hostname"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9c7c7c8ac16c798734b8a24560c1362120597c40d5e1459f09498f8f6c8f2ba"
-dependencies = [
- "cfg-if",
- "libc",
- "windows 0.52.0",
 ]
 
 [[package]]
@@ -1791,13 +1738,11 @@ checksum = "ddc24109865250148c2e0f3d25d4f0f479571723792d3802153c60922a4fb708"
 [[package]]
 name = "iroh"
 version = "0.30.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a59352a43dc4199fc804e1a7f3729bd14baff496fd3efbba98763e204bc4af0"
+source = "git+https://github.com/n0-computer/iroh.git?branch=main#cd12da362bdc58fd37cc71177cc665f3cde4546c"
 dependencies = [
  "aead",
  "anyhow",
  "backoff",
- "base64",
  "bytes",
  "concurrent-queue",
  "crypto_box",
@@ -1806,54 +1751,39 @@ dependencies = [
  "derive_more",
  "ed25519-dalek",
  "futures-buffered",
- "futures-concurrency",
- "futures-lite 2.5.0",
+ "futures-lite",
  "futures-sink",
  "futures-util",
  "governor",
  "hickory-resolver",
- "hostname 0.4.0",
  "http 1.2.0",
  "http-body-util",
  "hyper",
  "hyper-util",
  "igd-next",
- "iroh-base",
+ "iroh-base 0.30.0 (git+https://github.com/n0-computer/iroh.git?branch=main)",
  "iroh-metrics",
  "iroh-net-report",
  "iroh-quinn",
  "iroh-quinn-proto",
  "iroh-quinn-udp",
  "iroh-relay",
- "libc",
  "netdev",
- "netlink-packet-core",
- "netlink-packet-route 0.19.0",
- "netlink-packet-route 0.21.0",
- "netlink-sys",
  "netwatch",
- "num_enum",
- "once_cell",
  "pin-project",
  "pkarr",
  "portmapper",
- "postcard",
  "rand",
  "rcgen",
  "reqwest",
  "ring",
- "rtnetlink 0.13.1",
- "rtnetlink 0.14.1",
  "rustls",
  "rustls-webpki",
  "serde",
  "smallvec",
- "socket2",
  "strum",
  "stun-rs",
- "surge-ping",
  "thiserror 2.0.7",
- "time",
  "tokio",
  "tokio-rustls",
  "tokio-stream",
@@ -1863,8 +1793,6 @@ dependencies = [
  "tracing",
  "url",
  "webpki-roots",
- "windows 0.58.0",
- "wmi",
  "x509-parser",
  "z32",
 ]
@@ -1881,6 +1809,22 @@ dependencies = [
  "ed25519-dalek",
  "getrandom",
  "postcard",
+ "rand_core",
+ "serde",
+ "thiserror 2.0.7",
+ "url",
+]
+
+[[package]]
+name = "iroh-base"
+version = "0.30.0"
+source = "git+https://github.com/n0-computer/iroh.git?branch=main#cd12da362bdc58fd37cc71177cc665f3cde4546c"
+dependencies = [
+ "curve25519-dalek",
+ "data-encoding",
+ "derive_more",
+ "ed25519-dalek",
+ "getrandom",
  "rand_core",
  "serde",
  "thiserror 2.0.7",
@@ -1914,13 +1858,13 @@ dependencies = [
  "data-encoding",
  "derive_more",
  "futures-buffered",
- "futures-lite 2.5.0",
+ "futures-lite",
  "futures-util",
  "genawaiter",
  "hashlink",
  "hex",
  "iroh",
- "iroh-base",
+ "iroh-base 0.30.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "iroh-blake3",
  "iroh-io",
  "iroh-metrics",
@@ -1952,7 +1896,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "17e302c5ad649c6a7aa9ae8468e1c4dc2469321af0c6de7341c1be1bdaab434b"
 dependencies = [
  "bytes",
- "futures-lite 2.5.0",
+ "futures-lite",
  "pin-project",
  "smallvec",
  "tokio",
@@ -1981,16 +1925,15 @@ dependencies = [
 [[package]]
 name = "iroh-net-report"
 version = "0.30.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ee04b3b957169e3833f08791802e6bd9878213655d1adbcd9191ea78b8d671a"
+source = "git+https://github.com/n0-computer/iroh.git?branch=main#cd12da362bdc58fd37cc71177cc665f3cde4546c"
 dependencies = [
  "anyhow",
  "bytes",
  "derive_more",
  "futures-buffered",
- "futures-lite 2.5.0",
+ "futures-lite",
  "hickory-resolver",
- "iroh-base",
+ "iroh-base 0.30.0 (git+https://github.com/n0-computer/iroh.git?branch=main)",
  "iroh-metrics",
  "iroh-quinn",
  "iroh-relay",
@@ -2000,7 +1943,7 @@ dependencies = [
  "reqwest",
  "rustls",
  "surge-ping",
- "thiserror 1.0.69",
+ "thiserror 2.0.7",
  "tokio",
  "tokio-util",
  "tracing",
@@ -2059,44 +2002,36 @@ dependencies = [
 [[package]]
 name = "iroh-relay"
 version = "0.30.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa0080c8d0720009dc5fa109ef2ead96c5aeb8bb8e4534de8f13865520818207"
+source = "git+https://github.com/n0-computer/iroh.git?branch=main#cd12da362bdc58fd37cc71177cc665f3cde4546c"
 dependencies = [
  "anyhow",
- "base64",
  "bytes",
  "data-encoding",
  "derive_more",
  "futures-buffered",
- "futures-lite 2.5.0",
+ "futures-lite",
  "futures-sink",
  "futures-util",
  "governor",
  "hickory-proto",
  "hickory-resolver",
- "hostname 0.4.0",
  "http 1.2.0",
  "http-body-util",
  "hyper",
  "hyper-util",
- "iroh-base",
+ "iroh-base 0.30.0 (git+https://github.com/n0-computer/iroh.git?branch=main)",
  "iroh-metrics",
  "iroh-quinn",
  "iroh-quinn-proto",
- "libc",
  "lru",
  "num_enum",
- "once_cell",
  "pin-project",
  "postcard",
  "rand",
  "reqwest",
- "ring",
  "rustls",
  "rustls-webpki",
  "serde",
- "smallvec",
- "socket2",
  "stun-rs",
  "thiserror 2.0.7",
  "time",
@@ -2385,21 +2320,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "netlink-packet-route"
-version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "483325d4bfef65699214858f097d504eb812c38ce7077d165f301ec406c3066e"
-dependencies = [
- "anyhow",
- "bitflags 2.6.0",
- "byteorder",
- "libc",
- "log",
- "netlink-packet-core",
- "netlink-packet-utils",
-]
-
-[[package]]
 name = "netlink-packet-utils"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2449,7 +2369,7 @@ dependencies = [
  "atomic-waker",
  "bytes",
  "derive_more",
- "futures-lite 2.5.0",
+ "futures-lite",
  "futures-sink",
  "futures-util",
  "iroh-quinn-udp",
@@ -2906,7 +2826,7 @@ dependencies = [
  "base64",
  "bytes",
  "derive_more",
- "futures-lite 2.5.0",
+ "futures-lite",
  "futures-util",
  "igd-next",
  "iroh-metrics",
@@ -3384,7 +3304,7 @@ version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52e44394d2086d010551b14b53b1f24e31647570cd1deb0379e2c21b329aba00"
 dependencies = [
- "hostname 0.3.1",
+ "hostname",
  "quick-error",
 ]
 
@@ -3665,7 +3585,7 @@ dependencies = [
  "derive_more",
  "duct",
  "futures-buffered",
- "futures-lite 2.5.0",
+ "futures-lite",
  "indicatif",
  "iroh",
  "iroh-blobs",
@@ -4096,7 +4016,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28cce251fcbc87fac86a866eeb0d6c2d536fc16d06f184bb61aeae11aa4cee0c"
 dependencies = [
  "cfg-if",
- "fastrand 2.3.0",
+ "fastrand",
  "once_cell",
  "rustix",
  "windows-sys 0.59.0",
@@ -4567,12 +4487,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
-name = "waker-fn"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "317211a0dc0ceedd78fb2ca9a44aed3d7b9b26f81870d485c07122b4350673b7"
-
-[[package]]
 name = "walkdir"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4737,16 +4651,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e686886bc078bc1b0b600cac0147aadb815089b6e4da64016cbd754b6342700f"
 dependencies = [
  "windows-targets 0.48.5",
-]
-
-[[package]]
-name = "windows"
-version = "0.52.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e48a53791691ab099e5e2ad123536d0fff50652600abaf43bbf952894110d0be"
-dependencies = [
- "windows-core 0.52.0",
- "windows-targets 0.52.6",
 ]
 
 [[package]]

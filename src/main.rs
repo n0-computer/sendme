@@ -18,7 +18,6 @@ use clap::{
 use console::style;
 use data_encoding::HEXLOWER;
 use futures_buffered::BufferedStreamExt;
-use futures_lite::{future::Boxed, StreamExt};
 use indicatif::{
     HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
 };
@@ -37,9 +36,9 @@ use iroh_blobs::{
     provider::{self, CustomEventSender},
     store::{ExportMode, ImportMode, ImportProgress},
     ticket::BlobTicket,
-    util::local_pool::LocalPool,
     BlobFormat, Hash, HashAndFormat, TempTag,
 };
+use n0_future::{future::Boxed, StreamExt};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
@@ -611,12 +610,11 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     tokio::fs::create_dir_all(&blobs_data_dir).await?;
 
     let endpoint = builder.bind().await?;
-    let lp = LocalPool::default();
     let ps = SendStatus::new();
     let blobs = Blobs::persistent(&blobs_data_dir)
         .await?
         .events(ps.new_client().into())
-        .build(lp.handle(), &endpoint);
+        .build(&endpoint);
 
     let router = iroh::protocol::Router::builder(endpoint)
         .accept(iroh_blobs::ALPN, blobs.clone())

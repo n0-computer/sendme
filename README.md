@@ -56,3 +56,16 @@ directory.
 On completion it will delete the temp directory.
 
 All temp directories start with `.sendme-`.
+
+```
+Example:
+% sendme send file.txt
+imported file file.txt, 9 B, hash 422f71281459827b93f292037c647af260cabbc700f157c35e2dd1f946983695
+to get this data, use
+sendme receive blobadrdsrj5maxx4xhqfkmkijm64cki452e4ofy3k74ki5mmaq5ji6b4ajdnb2hi4dthixs6ylqomys2mjoojswyylzfzuxe33ifzxgk5dxn5zgwlrpaqalmrnqldvtaagavaaqfmepamasiakjaaofg3tzacwwtboy276rjmmpamasiakjaaofg3tzzt6esluhhtfn3mmpamauel3rfakftat3spzjea34mr5peygkxpdqb4kxynpc3upzi2mdnfi
+⠤ [00:05:17] 5066901520 transfer completed 96 0 seconds
+
+% sendme receive blobadrdsrj5maxx4xhqfkmkijm64cki452e4ofy3k74ki5mmaq5ji6b4ajdnb2hi4dthixs6ylqomys2mjoojswyylzfzuxe33ifzxgk5dxn5zgwlrpaqalmrnqldvtaagavaaqfmepamasiakjaaofg3tzacwwtboy276rjmmpamasiakjaaofg3tzzt6esluhhtfn3mmpamauel3rfakftat3spzjea34mr5peygkxpdqb4kxynpc3upzi2mdnfi
+getting collection 422f71281459827b93f292037c647af260cabbc700f157c35e2dd1f946983695 1 files, 9 B
+downloading to: file.txt;
+```

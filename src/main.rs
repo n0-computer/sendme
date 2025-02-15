@@ -649,11 +649,16 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     println!("to get this data, use");
     println!("sendme receive {}", ticket);
 
-    //Add command to the clipboard
-    let mut clipboard = Clipboard::new().unwrap();
-    clipboard
-        .set_text(format!("sendme receive {}", ticket))
-        .unwrap();
+    // Add command to the clipboard
+    let clipboard = Clipboard::new();
+    match clipboard {
+        Ok(mut clip) => {
+            if let Err(e) = clip.set_text(format!("sendme receive {}", ticket)) {
+                eprintln!("Could not add to clipboard: {}", e);
+            }
+        }
+        Err(e) => eprintln!("Could not access clipboard: {}", e),
+    }
 
     drop(temp_tag);
 

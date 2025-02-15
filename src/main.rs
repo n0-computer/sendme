@@ -11,6 +11,7 @@ use std::{
 };
 
 use anyhow::Context;
+use arboard::Clipboard;
 use clap::{
     error::{ContextKind, ErrorKind},
     CommandFactory, Parser, Subcommand,
@@ -200,6 +201,10 @@ pub struct SendArgs {
 
     #[clap(flatten)]
     pub common: CommonArgs,
+
+    /// Store the receive command in the clipboard.
+    #[clap(short = 'c', long)]
+    pub clipboard: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -647,6 +652,21 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     }
     println!("to get this data, use");
     println!("sendme receive {}", ticket);
+
+    // Add command to the clipboard
+    if args.clipboard {
+        let clipboard = Clipboard::new();
+        match clipboard {
+            Ok(mut clip) => {
+                if let Err(e) = clip.set_text(format!("sendme receive {}", ticket)) {
+                    eprintln!("Could not add to clipboard: {}", e);
+                } else {
+                    println!("Command added to clipboard.")
+                }
+            }
+            Err(e) => eprintln!("Could not access clipboard: {}", e),
+        }
+    }
 
     drop(temp_tag);
 

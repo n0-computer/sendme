@@ -11,6 +11,7 @@ use std::{
 };
 
 use anyhow::Context;
+use arboard::Clipboard;
 use clap::{
     error::{ContextKind, ErrorKind},
     CommandFactory, Parser, Subcommand,
@@ -647,6 +648,12 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     }
     println!("to get this data, use");
     println!("sendme receive {}", ticket);
+
+    //Add command to the clipboard
+    let mut clipboard = Clipboard::new().unwrap();
+    clipboard
+        .set_text(format!("sendme receive {}", ticket))
+        .unwrap();
 
     drop(temp_tag);
 

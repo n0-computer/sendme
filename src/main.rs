@@ -201,6 +201,10 @@ pub struct SendArgs {
 
     #[clap(flatten)]
     pub common: CommonArgs,
+
+    /// Store the receive command in the clipboard.
+    #[clap(short = 'c', long, action = clap::ArgAction::Count)]
+    pub clipboard: u8,
 }
 
 #[derive(Parser, Debug)]
@@ -650,14 +654,18 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     println!("sendme receive {}", ticket);
 
     // Add command to the clipboard
-    let clipboard = Clipboard::new();
-    match clipboard {
-        Ok(mut clip) => {
-            if let Err(e) = clip.set_text(format!("sendme receive {}", ticket)) {
-                eprintln!("Could not add to clipboard: {}", e);
+    if args.clipboard > 0 {
+        let clipboard = Clipboard::new();
+        match clipboard {
+            Ok(mut clip) => {
+                if let Err(e) = clip.set_text(format!("sendme receive {}", ticket)) {
+                    eprintln!("Could not add to clipboard: {}", e);
+                } else {
+                    println!("Command added to clipboard.")
+                }
             }
+            Err(e) => eprintln!("Could not access clipboard: {}", e),
         }
-        Err(e) => eprintln!("Could not access clipboard: {}", e),
     }
 
     drop(temp_tag);

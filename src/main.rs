@@ -1,16 +1,7 @@
 //! Command line arguments.
 
-use std::{
-    collections::BTreeMap,
-    fmt::{Display, Formatter},
-    net::{SocketAddrV4, SocketAddrV6},
-    path::{Component, Path, PathBuf},
-    str::FromStr,
-    sync::Arc,
-    time::Duration,
-};
-
 use anyhow::Context;
+use arboard::Clipboard;
 use clap::{
     error::{ContextKind, ErrorKind},
     CommandFactory, Parser, Subcommand,
@@ -41,6 +32,17 @@ use iroh_blobs::{
 use n0_future::{future::Boxed, StreamExt};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use std::{
+    collections::BTreeMap,
+    fmt::{Display, Formatter},
+    net::{SocketAddrV4, SocketAddrV6},
+    path::{Component, Path, PathBuf},
+    str::FromStr,
+    sync::Arc,
+    time::Duration,
+};
+use tokio::io::{self, AsyncBufReadExt, BufReader};
+use tokio::task;
 use walkdir::WalkDir;
 
 /// Send a file or directory between two machines, using blake3 verified streaming.
@@ -200,6 +202,10 @@ pub struct SendArgs {
 
     #[clap(flatten)]
     pub common: CommonArgs,
+
+    /// Store the receive command in the clipboard.
+    #[clap(short = 'c', long, action = clap::ArgAction::Count)]
+    pub clipboard: u8,
 }
 
 #[derive(Parser, Debug)]
@@ -645,8 +651,17 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
             println!("    {} {name}", print_hash(hash, args.common.format));
         }
     }
+
+    let command = format!("sendme receive {ticket}");
     println!("to get this data, use");
-    println!("sendme receive {}", ticket);
+    println!("{}", command);
+    println!("Press C+Enter to copy the command to the clipboard.");
+    // Add command to the clipboard
+    if args.clipboard > 0 {
+        copy_to_clipboard(command.clone().as_str());
+    }
+
+    task::spawn(listen_for_clipboard_command(command.clone()));
 
     drop(temp_tag);
 
@@ -658,6 +673,30 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     tokio::fs::remove_dir_all(blobs_data_dir).await?;
 
     Ok(())
+}
+
+fn copy_to_clipboard(ticket: &str) {
+    let clipboard = Clipboard::new();
+    match clipboard {
+        Ok(mut clip) => {
+            if let Err(e) = clip.set_text(format!("sendme receive {}", ticket)) {
+                eprintln!("Could not add to clipboard: {}", e);
+            } else {
+                println!("Command copied to clipboard.");
+            }
+        }
+        Err(e) => eprintln!("Could not access clipboard: {}", e),
+    }
+}
+
+async fn listen_for_clipboard_command(command: String) {
+    let stdin = io::stdin();
+    let mut reader = BufReader::new(stdin).lines();
+    while let Ok(Some(line)) = reader.next_line().await {
+        if line.trim().eq_ignore_ascii_case("C") {
+            copy_to_clipboard(&command);
+        }
+    }
 }
 
 fn make_download_progress() -> ProgressBar {

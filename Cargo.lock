@@ -245,7 +245,6 @@ dependencies = [
  "instant",
  "pin-project-lite",
  "rand 0.8.5",
- "tokio",
 ]
 
 [[package]]
@@ -669,20 +668,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dashmap"
-version = "6.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
-dependencies = [
- "cfg-if",
- "crossbeam-utils",
- "hashbrown 0.14.5",
- "lock_api",
- "once_cell",
- "parking_lot_core",
-]
-
-[[package]]
 name = "data-encoding"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1096,12 +1081,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f90f7dce0722e95104fcb095585910c0977252f286e354b5e3bd38902cd99988"
 
 [[package]]
-name = "futures-timer"
-version = "3.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f288b0a4f20f9a56b5d1da57e2227c661b7b16168e2f72365f57b63326e29b24"
-
-[[package]]
 name = "futures-util"
 version = "0.3.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1223,27 +1202,6 @@ name = "glob"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8d1add55171497b4705a648c6b583acafb01d58050a51727785f0b2c8e0a2b2"
-
-[[package]]
-name = "governor"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0746aa765db78b521451ef74221663b57ba595bf83f75d0ce23cc09447c8139f"
-dependencies = [
- "cfg-if",
- "dashmap",
- "futures-sink",
- "futures-timer",
- "futures-util",
- "no-std-compat",
- "nonzero_ext",
- "parking_lot",
- "portable-atomic",
- "quanta",
- "rand 0.8.5",
- "smallvec",
- "spinning_top",
-]
 
 [[package]]
 name = "h2"
@@ -1745,6 +1703,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e0242819d153cba4b4b05a5a8f2a7e9bbf97b6055b2a002b395c96b5ff3c0222"
 dependencies = [
  "cfg-if",
+ "js-sys",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -1767,14 +1728,16 @@ checksum = "469fb0b9cefa57e3ef31275ee7cacb78f2fdca44e4765491884a2b119d4eb130"
 
 [[package]]
 name = "iroh"
-version = "0.32.1"
-source = "git+https://github.com/n0-computer/iroh.git?branch=main#f640e835494c36b7715a275fd154b86272235bcb"
+version = "0.33.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4ffd6af2e000f04972068c0318e0d8fa90ee9cfcb2bc6124db38591500e0278"
 dependencies = [
  "aead",
  "anyhow",
  "atomic-waker",
  "backoff",
  "bytes",
+ "cfg_aliases",
  "concurrent-queue",
  "crypto_box",
  "data-encoding",
@@ -1782,14 +1745,11 @@ dependencies = [
  "derive_more",
  "ed25519-dalek",
  "futures-util",
- "governor",
  "hickory-resolver",
  "http 1.2.0",
- "http-body-util",
- "hyper",
- "hyper-util",
  "igd-next",
- "iroh-base 0.32.0 (git+https://github.com/n0-computer/iroh.git?branch=main)",
+ "instant",
+ "iroh-base",
  "iroh-metrics",
  "iroh-net-report",
  "iroh-quinn",
@@ -1813,12 +1773,13 @@ dependencies = [
  "strum",
  "stun-rs",
  "thiserror 2.0.11",
+ "time",
  "tokio",
- "tokio-rustls",
  "tokio-stream",
  "tokio-util",
  "tracing",
  "url",
+ "wasm-bindgen-futures",
  "webpki-roots",
  "x509-parser",
  "z32",
@@ -1826,9 +1787,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-base"
-version = "0.32.0"
+version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d56b4a9e4db1e505710d0aaca2afc17dd92aeac2dd06a34ccf9934dab7240bc9"
+checksum = "011d271a95b41218d22bdaf3352f29ef1dd7d6be644ca8543941655bec5f3d35"
 dependencies = [
  "curve25519-dalek",
  "data-encoding",
@@ -1836,22 +1797,6 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.2.15",
  "postcard",
- "rand_core 0.6.4",
- "serde",
- "thiserror 2.0.11",
- "url",
-]
-
-[[package]]
-name = "iroh-base"
-version = "0.32.0"
-source = "git+https://github.com/n0-computer/iroh.git?branch=main#f640e835494c36b7715a275fd154b86272235bcb"
-dependencies = [
- "curve25519-dalek",
- "data-encoding",
- "derive_more",
- "ed25519-dalek",
- "getrandom 0.2.15",
  "rand_core 0.6.4",
  "serde",
  "thiserror 2.0.11",
@@ -1873,8 +1818,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-blobs"
-version = "0.32.0"
-source = "git+https://github.com/n0-computer/iroh-blobs.git?branch=main#5d67f47bd001eef39a36345d1c45b193cbf672b5"
+version = "0.33.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96cb8430c257cd42b2da9f94bc7e72912b182e760ab5c7fdbecd250d51de5e44"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -1890,7 +1836,7 @@ dependencies = [
  "hashlink",
  "hex",
  "iroh",
- "iroh-base 0.32.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "iroh-base",
  "iroh-blake3",
  "iroh-io",
  "iroh-metrics",
@@ -1949,15 +1895,16 @@ dependencies = [
 
 [[package]]
 name = "iroh-net-report"
-version = "0.32.0"
-source = "git+https://github.com/n0-computer/iroh.git?branch=main#f640e835494c36b7715a275fd154b86272235bcb"
+version = "0.33.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d2652f42eadc63458e36c0a422569f338639dc0b5bb469db0eb4a382b4e295c"
 dependencies = [
  "anyhow",
  "bytes",
  "cfg_aliases",
  "derive_more",
  "hickory-resolver",
- "iroh-base 0.32.0 (git+https://github.com/n0-computer/iroh.git?branch=main)",
+ "iroh-base",
  "iroh-metrics",
  "iroh-quinn",
  "iroh-relay",
@@ -2032,8 +1979,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-relay"
-version = "0.32.0"
-source = "git+https://github.com/n0-computer/iroh.git?branch=main#f640e835494c36b7715a275fd154b86272235bcb"
+version = "0.33.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c930ccc4dfd0196b531344e3d0f83a0f82c45b170406e04a2491cba571faec5b"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2045,7 +1993,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
- "iroh-base 0.32.0 (git+https://github.com/n0-computer/iroh.git?branch=main)",
+ "iroh-base",
  "iroh-metrics",
  "iroh-quinn",
  "iroh-quinn-proto",
@@ -2469,12 +2417,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "no-std-compat"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b93853da6d84c2e3c7d730d6473e8817692dd89be387eb01b94d7f108ecb5b8c"
-
-[[package]]
 name = "no-std-net"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2489,12 +2431,6 @@ dependencies = [
  "memchr",
  "minimal-lexical",
 ]
-
-[[package]]
-name = "nonzero_ext"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38bf9645c8b145698bb0b18a4637dcacbc421ea49bef2317e4fd8065a387cf21"
 
 [[package]]
 name = "nu-ansi-term"
@@ -3042,21 +2978,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "quanta"
-version = "0.12.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3bd1fe6824cea6538803de3ff1bc0cf3949024db3d43c9643024bfb33a807c0e"
-dependencies = [
- "crossbeam-utils",
- "libc",
- "once_cell",
- "raw-cpuid",
- "wasi 0.11.0+wasi-snapshot-preview1",
- "web-sys",
- "winapi",
-]
-
-[[package]]
 name = "quick-error"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3204,15 +3125,6 @@ dependencies = [
  "inplace-vec-builder",
  "ref-cast",
  "smallvec",
-]
-
-[[package]]
-name = "raw-cpuid"
-version = "11.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6928fa44c097620b706542d428957635951bade7143269085389d42c8a4927e"
-dependencies = [
- "bitflags 2.8.0",
 ]
 
 [[package]]
@@ -3856,15 +3768,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "spinning_top"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d96d2d1d716fb500937168cc09353ffdc7a012be8475ac7308e1bdf0e3923300"
-dependencies = [
- "lock_api",
-]
-
-[[package]]
 name = "spki"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4135,6 +4038,7 @@ checksum = "35e7868883861bd0e56d9ac6efcaaca0d6d5d82a2a7ec8209ff492c07cf37b21"
 dependencies = [
  "deranged",
  "itoa",
+ "js-sys",
  "num-conv",
  "powerfmt",
  "serde",
@@ -4231,6 +4135,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

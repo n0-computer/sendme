@@ -125,7 +125,7 @@ pub struct CommonArgs {
 
     /// The relay URL to use as a home relay,
     ///
-    /// Can be set to "disable" to disable relay servers and "default"
+    /// Can be set to "disabled" to disable relay servers and "default"
     /// to configure default servers.
     #[clap(long, default_value_t = RelayModeOption::Default)]
     pub relay: RelayModeOption,

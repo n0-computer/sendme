@@ -37,6 +37,7 @@ tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 walkdir = "2.4.0"
 data-encoding = "2.6.0"
 n0-future = "0.1.2"
+arboard = "3.4.1"
 
 [dev-dependencies]
 duct = "0.13.6"

@@ -6,7 +6,7 @@ use clap::{
     error::{ContextKind, ErrorKind},
     CommandFactory, Parser, Subcommand,
 };
-use console::style;
+use console::{style, Key, Term};
 use data_encoding::HEXLOWER;
 use futures_buffered::BufferedStreamExt;
 use indicatif::{
@@ -41,8 +41,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tokio::io::{self, AsyncBufReadExt, BufReader};
-use tokio::task;
 use walkdir::WalkDir;
 
 /// Send a file or directory between two machines, using blake3 verified streaming.
@@ -127,7 +125,7 @@ pub struct CommonArgs {
 
     /// The relay URL to use as a home relay,
     ///
-    /// Can be set to "disable" to disable relay servers and "default"
+    /// Can be set to "disabled" to disable relay servers and "default"
     /// to configure default servers.
     #[clap(long, default_value_t = RelayModeOption::Default)]
     pub relay: RelayModeOption,
@@ -204,8 +202,8 @@ pub struct SendArgs {
     pub common: CommonArgs,
 
     /// Store the receive command in the clipboard.
-    #[clap(short = 'c', long, action = clap::ArgAction::Count)]
-    pub clipboard: u8,
+    #[clap(short = 'c', long)]
+    pub clipboard: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -652,21 +650,27 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         }
     }
 
-    let command = format!("sendme receive {ticket}");
     println!("to get this data, use");
-    println!("{}", command);
-    println!("Press C+Enter to copy the command to the clipboard.");
+    println!("sendme receive {}", ticket);
+
     // Add command to the clipboard
-    if args.clipboard > 0 {
-        copy_to_clipboard(command.clone().as_str());
+    if args.clipboard {
+        add_to_clipboard(&ticket);
     }
 
-    task::spawn(listen_for_clipboard_command(command.clone()));
+    let _keyboard = tokio::task::spawn(async move {
+        let term = Term::stdout();
+        println!("press c to copy command to clipboard, or use the --clipboard argument");
+        loop {
+            if let Ok(Key::Char('c')) = term.read_key() {
+                add_to_clipboard(&ticket);
+            }
+        }
+    });
+
+    tokio::signal::ctrl_c().await?;
 
     drop(temp_tag);
-
-    // Wait for exit
-    tokio::signal::ctrl_c().await?;
 
     println!("shutting down");
     tokio::time::timeout(Duration::from_secs(2), router.shutdown()).await??;
@@ -675,27 +679,17 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn copy_to_clipboard(ticket: &str) {
+fn add_to_clipboard(ticket: &BlobTicket) {
     let clipboard = Clipboard::new();
     match clipboard {
         Ok(mut clip) => {
             if let Err(e) = clip.set_text(format!("sendme receive {}", ticket)) {
                 eprintln!("Could not add to clipboard: {}", e);
             } else {
-                println!("Command copied to clipboard.");
+                println!("Command added to clipboard.")
             }
         }
         Err(e) => eprintln!("Could not access clipboard: {}", e),
-    }
-}
-
-async fn listen_for_clipboard_command(command: String) {
-    let stdin = io::stdin();
-    let mut reader = BufReader::new(stdin).lines();
-    while let Ok(Some(line)) = reader.next_line().await {
-        if line.trim().eq_ignore_ascii_case("C") {
-            copy_to_clipboard(&command);
-        }
     }
 }
 

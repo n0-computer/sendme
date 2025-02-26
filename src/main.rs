@@ -16,7 +16,7 @@ use clap::{
     error::{ContextKind, ErrorKind},
     CommandFactory, Parser, Subcommand,
 };
-use console::style;
+use console::{style, Key, Term};
 use data_encoding::HEXLOWER;
 use futures_buffered::BufferedStreamExt;
 use indicatif::{
@@ -651,33 +651,56 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         }
     }
     println!("to get this data, use");
+    println!();
     println!("sendme receive {}", ticket);
+    println!();
 
     // Add command to the clipboard
     if args.clipboard {
-        let clipboard = Clipboard::new();
-        match clipboard {
-            Ok(mut clip) => {
-                if let Err(e) = clip.set_text(format!("sendme receive {}", ticket)) {
-                    eprintln!("Could not add to clipboard: {}", e);
-                } else {
-                    println!("Command added to clipboard.")
+        add_to_clipboard(&ticket);
+        // Wait for exit
+        tokio::signal::ctrl_c().await?;
+    } else {
+        let keyboard = tokio::task::spawn_blocking(move || {
+            let term = Term::stdout();
+            println!("press c to copy command to clipboard, or use the --clipboard argument");
+            loop {
+                match term.read_key() {
+                    Ok(Key::Char('c')) => {
+                        add_to_clipboard(&ticket);
+                    }
+                    // Wait for exit
+                    Ok(Key::CtrlC) => {
+                        break;
+                    }
+                    _ => (),
                 }
             }
-            Err(e) => eprintln!("Could not access clipboard: {}", e),
-        }
+        });
+        keyboard.await?;
     }
 
     drop(temp_tag);
-
-    // Wait for exit
-    tokio::signal::ctrl_c().await?;
 
     println!("shutting down");
     tokio::time::timeout(Duration::from_secs(2), router.shutdown()).await??;
     tokio::fs::remove_dir_all(blobs_data_dir).await?;
 
     Ok(())
+}
+
+fn add_to_clipboard(ticket: &BlobTicket) {
+    let clipboard = Clipboard::new();
+    match clipboard {
+        Ok(mut clip) => {
+            if let Err(e) = clip.set_text(format!("sendme receive {}", ticket)) {
+                eprintln!("Could not add to clipboard: {}", e);
+            } else {
+                println!("Command added to clipboard.")
+            }
+        }
+        Err(e) => eprintln!("Could not access clipboard: {}", e),
+    }
 }
 
 fn make_download_progress() -> ProgressBar {

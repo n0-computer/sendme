@@ -1,21 +1,12 @@
 //! Command line arguments.
 
-use std::{
-    collections::BTreeMap,
-    fmt::{Display, Formatter},
-    net::{SocketAddrV4, SocketAddrV6},
-    path::{Component, Path, PathBuf},
-    str::FromStr,
-    sync::Arc,
-    time::Duration,
-};
-
 use anyhow::Context;
+use arboard::Clipboard;
 use clap::{
     error::{ContextKind, ErrorKind},
     CommandFactory, Parser, Subcommand,
 };
-use console::style;
+use console::{style, Key, Term};
 use data_encoding::HEXLOWER;
 use futures_buffered::BufferedStreamExt;
 use indicatif::{
@@ -41,6 +32,15 @@ use iroh_blobs::{
 use n0_future::{future::Boxed, StreamExt};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use std::{
+    collections::BTreeMap,
+    fmt::{Display, Formatter},
+    net::{SocketAddrV4, SocketAddrV6},
+    path::{Component, Path, PathBuf},
+    str::FromStr,
+    sync::Arc,
+    time::Duration,
+};
 use walkdir::WalkDir;
 
 /// Send a file or directory between two machines, using blake3 verified streaming.
@@ -200,6 +200,10 @@ pub struct SendArgs {
 
     #[clap(flatten)]
     pub common: CommonArgs,
+
+    /// Store the receive command in the clipboard.
+    #[clap(short = 'c', long)]
+    pub clipboard: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -645,19 +649,48 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
             println!("    {} {name}", print_hash(hash, args.common.format));
         }
     }
+
     println!("to get this data, use");
     println!("sendme receive {}", ticket);
 
-    drop(temp_tag);
+    // Add command to the clipboard
+    if args.clipboard {
+        add_to_clipboard(&ticket);
+    }
 
-    // Wait for exit
+    let _keyboard = tokio::task::spawn(async move {
+        let term = Term::stdout();
+        println!("press c to copy command to clipboard, or use the --clipboard argument");
+        loop {
+            if let Ok(Key::Char('c')) = term.read_key() {
+                add_to_clipboard(&ticket);
+            }
+        }
+    });
+
     tokio::signal::ctrl_c().await?;
+
+    drop(temp_tag);
 
     println!("shutting down");
     tokio::time::timeout(Duration::from_secs(2), router.shutdown()).await??;
     tokio::fs::remove_dir_all(blobs_data_dir).await?;
 
     Ok(())
+}
+
+fn add_to_clipboard(ticket: &BlobTicket) {
+    let clipboard = Clipboard::new();
+    match clipboard {
+        Ok(mut clip) => {
+            if let Err(e) = clip.set_text(format!("sendme receive {}", ticket)) {
+                eprintln!("Could not add to clipboard: {}", e);
+            } else {
+                println!("Command added to clipboard.")
+            }
+        }
+        Err(e) => eprintln!("Could not access clipboard: {}", e),
+    }
 }
 
 fn make_download_progress() -> ProgressBar {

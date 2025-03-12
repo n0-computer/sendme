@@ -1,5 +1,4 @@
-$repo = "n0-computer/sendme"
-$release_url = "https://api.github.com/repos/$repo/releases/latest"
+$release_url = "https://api.github.com/repos/n0-computer/sendme/releases/latest"
 
 $target = "windows-x86_64"
 $zipFile = "sendme.zip"

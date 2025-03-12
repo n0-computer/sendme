@@ -18,14 +18,19 @@ TLS.
 
 # Installation
 
-## For Linux/MacOS
+## Build from Source
 ```
 cargo install sendme
 ```
 
-## For windows (Run in Powershell)
+## For Linux/MacOS
 ```
-iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/n0-computer/sendme/main/install-sendme.ps1'))
+curl -fsSL https://iroh.computer/sendme.sh | sh
+```
+
+## For Windows (Run in Powershell)
+```
+iwr https://iroh.computer/sendme.ps1 -useb | iex
 ```
 
 # Usage

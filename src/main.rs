@@ -121,6 +121,9 @@ pub struct CommonArgs {
     /// to configure default servers.
     #[clap(long, default_value_t = RelayModeOption::Default)]
     pub relay: RelayModeOption,
+
+    #[clap(long)]
+    pub show_secret : bool,
 }
 
 /// Available command line options for configuring relays.
@@ -476,7 +479,7 @@ async fn export(db: &Store, collection: Collection) -> anyhow::Result<()> {
             ExportPath {
                 hash: *hash,
                 target,
-                mode: ExportMode::TryReference,
+                mode: ExportMode::Copy,
             }
         )
         .finish()
@@ -574,6 +577,9 @@ impl Drop for ClientStatus {
 
 async fn send(args: SendArgs) -> anyhow::Result<()> {
     let secret_key = get_or_create_secret(args.common.verbose > 0)?;
+    if args.common.show_secret {
+        eprintln!("using secret key {}", secret_key);
+    }
     // create a magicsocket endpoint
     let mut builder = Endpoint::builder()
         .alpns(vec![blobs2::protocol::ALPN.to_vec()])

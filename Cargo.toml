@@ -26,7 +26,7 @@ futures-buffered = "0.2.4"
 futures-lite = "2.3.0"
 indicatif = "0.17.7"
 blobs2 = { path = "../blobs2" }
-iroh = "0.33"
+iroh = "0.34"
 num_cpus = "1.16.0"
 rand = "0.8.5"
 serde = { version = "1", features = ["derive"] }

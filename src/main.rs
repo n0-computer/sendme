@@ -12,7 +12,7 @@ use std::{
 use anyhow::Context;
 use blobs2::{
     api::{
-        blobs::{ExportMode, ExportPath, ImportMode, ImportPath},
+        blobs::{ExportMode, ExportPath, ImportMode, ImportPath, ImportPathOptions, ImportProgress},
         Scope, Store,
     },
     format::collection::Collection,
@@ -39,7 +39,7 @@ use iroh::{
     discovery::{dns::DnsDiscovery, pkarr::PkarrPublisher},
     Endpoint, NodeAddr, RelayMap, RelayMode, RelayUrl, SecretKey,
 };
-use n0_future::{pin, StreamExt};
+use n0_future::{pin, stream, StreamExt};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tokio::{select, sync::mpsc};
@@ -399,7 +399,8 @@ pub fn canonicalized_path_to_string(
 ///
 /// If the input is a directory, the collection contains all the files in the
 /// directory.
-async fn import(path: PathBuf, db: &Store) -> anyhow::Result<(TempTag, u64, Collection)> {
+async fn import(path: PathBuf, db: &Store, mp: &mut MultiProgress) -> anyhow::Result<(TempTag, u64, Collection)> {
+    let parallelism = 1; // num_cpus::get();
     let path = path.canonicalize()?;
     anyhow::ensure!(path.exists(), "path {} does not exist", path.display());
     let root = path.parent().context("context get parent")?;
@@ -422,27 +423,73 @@ async fn import(path: PathBuf, db: &Store) -> anyhow::Result<(TempTag, u64, Coll
         .filter_map(Result::transpose)
         .collect::<anyhow::Result<Vec<_>>>()?;
     // import all the files, using num_cpus workers, return names and temp tags
-    let mut names_and_tags = futures_lite::stream::iter(data_sources)
+    let op = mp.add(ProgressBar::hidden());
+    op.set_style(
+        ProgressStyle::with_template(
+            "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos}/{len}",
+        )?
+        .progress_chars("#>-"),
+    );
+    op.set_message(format!("importing {} files", data_sources.len()));
+    op.set_length(data_sources.len() as u64);
+    let mut names_and_tags =  n0_future::stream::iter(data_sources)
         .map(|(name, path)| {
             let db = db.clone();
+            let pb = mp.add(ProgressBar::hidden());
+            let op = op.clone();
             async move {
-                let temp_tag = db
-                    .add_path_with_opts(ImportPath {
+                op.inc(1);
+                pb.set_style(
+                    ProgressStyle::with_template(
+                        "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}",
+                    )?
+                    .progress_chars("#>-"),
+                );
+                pb.set_message(format!("copying {name}"));
+                let mut import = db
+                    .add_path_with_opts(ImportPathOptions {
                         path,
                         mode: ImportMode::TryReference,
                         format: BlobFormat::Raw,
-                        scope: Scope::GLOBAL,
-                    })
-                    .temp_tag()
-                    .await?;
+                    }).stream().await?;
+                let temp_tag = loop {
+                    let item = import.next().await.context("import stream ended without a tag")?;
+                    println!("importing {name}");
+                    println!("got item {item:?}");
+                    match item {
+                        ImportProgress::Size { size } => {
+                            pb.set_length(size);
+                        }
+                        ImportProgress::CopyProgress { offset } => {
+                            pb.set_position(offset);
+                        }
+                        ImportProgress::CopyDone { .. } => {
+                            pb.set_position(0);
+                            pb.set_message(format!("computing outboard {name}"));
+                        }
+                        ImportProgress::OutboardProgress { offset } => {
+                            pb.set_position(offset);
+                        }
+                        ImportProgress::Error { cause } => {
+                            pb.finish_and_clear();
+                            anyhow::bail!("error importing {}: {}", name, cause);
+                        }
+                        ImportProgress::Done { tt } => {
+                            pb.finish_and_clear();
+                            break tt;
+                        }
+                    }
+                };
                 anyhow::Ok((name, temp_tag, 0))
             }
         })
-        .buffered_unordered(num_cpus::get())
+        .buffered_unordered(parallelism)
         .collect::<Vec<_>>()
         .await
         .into_iter()
         .collect::<anyhow::Result<Vec<_>>>()?;
+    println!("done importing");
+    mp.clear()?;
     names_and_tags.sort_by(|(a, _, _), (b, _, _)| a.cmp(b));
     // total size of all files
     let size = names_and_tags.iter().map(|(_, _, size)| *size).sum::<u64>();
@@ -620,7 +667,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     tokio::fs::create_dir_all(&blobs_data_dir).await?;
 
     let endpoint = builder.bind().await?;
-    let ps = SendStatus::new();
+    let mut mp = MultiProgress::new();
     let store = blobs2::store::fs::FsStore::load(&blobs_data_dir).await?;
     let blobs = Blobs::new(&store, endpoint.clone());
 
@@ -630,7 +677,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         .await?;
 
     let path = args.path;
-    let (temp_tag, size, collection) = import(path.clone(), blobs.store()).await?;
+    let (temp_tag, size, collection) = import(path.clone(), blobs.store(), &mut mp).await?;
     let hash = *temp_tag.hash();
 
     // wait for the endpoint to figure out its address before making a ticket

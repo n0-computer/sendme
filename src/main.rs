@@ -489,7 +489,7 @@ async fn export(db: &Store, collection: Collection) -> anyhow::Result<()> {
         db.export_with_opts(ExportPath {
             hash: *hash,
             target,
-            mode: ExportMode::Copy,
+            mode: ExportMode::TryReference,
         })
         .finish()
         .await?;

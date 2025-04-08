@@ -10,6 +10,21 @@ use std::{
 };
 
 use anyhow::Context;
+use blobs2::{
+    api::{
+        blobs::{ExportMode, ExportPath, ImportMode, ImportPath},
+        Scope, Store,
+    },
+    format::collection::Collection,
+    get::{
+        fsm::{AtBlobHeaderNextError, DecodeError},
+        request::get_hash_seq_and_sizes,
+    },
+    net_protocol::Blobs,
+    ticket::BlobTicket,
+    util::temp_tag::TempTag,
+    BlobFormat, Hash, HashAndFormat,
+};
 use clap::{
     error::{ContextKind, ErrorKind},
     CommandFactory, Parser, Subcommand,
@@ -24,15 +39,10 @@ use iroh::{
     discovery::{dns::DnsDiscovery, pkarr::PkarrPublisher},
     Endpoint, NodeAddr, RelayMap, RelayMode, RelayUrl, SecretKey,
 };
-use blobs2::{
-    api::{blobs::{ExportMode, ExportPath, ImportMode, ImportPath}, Scope, Store}, format::collection::Collection, get::{
-        fsm::{AtBlobHeaderNextError, DecodeError},
-        request::get_hash_seq_and_sizes,
-    }, net_protocol::Blobs, ticket::BlobTicket, util::temp_tag::TempTag, BlobFormat, Hash, HashAndFormat
-};
-use n0_future::StreamExt;
+use n0_future::{pin, StreamExt};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use tokio::{select, sync::mpsc};
 use walkdir::WalkDir;
 
 /// Send a file or directory between two machines, using blake3 verified streaming.
@@ -123,7 +133,7 @@ pub struct CommonArgs {
     pub relay: RelayModeOption,
 
     #[clap(long)]
-    pub show_secret : bool,
+    pub show_secret: bool,
 }
 
 /// Available command line options for configuring relays.
@@ -389,10 +399,7 @@ pub fn canonicalized_path_to_string(
 ///
 /// If the input is a directory, the collection contains all the files in the
 /// directory.
-async fn import(
-    path: PathBuf,
-    db: &Store,
-) -> anyhow::Result<(TempTag, u64, Collection)> {
+async fn import(path: PathBuf, db: &Store) -> anyhow::Result<(TempTag, u64, Collection)> {
     let path = path.canonicalize()?;
     anyhow::ensure!(path.exists(), "path {} does not exist", path.display());
     let root = path.parent().context("context get parent")?;
@@ -474,14 +481,16 @@ async fn export(db: &Store, collection: Collection) -> anyhow::Result<()> {
             eprintln!("You can remove the file or directory and try again. The download will not be repeated.");
             anyhow::bail!("target {} already exists", target.display());
         }
-        println!("exporting {} to {}", print_hash(hash, Format::Hex), target.display());
-        db.export_with_opts(
-            ExportPath {
-                hash: *hash,
-                target,
-                mode: ExportMode::Copy,
-            }
-        )
+        println!(
+            "exporting {} to {}",
+            print_hash(hash, Format::Hex),
+            target.display()
+        );
+        db.export_with_opts(ExportPath {
+            hash: *hash,
+            target,
+            mode: ExportMode::Copy,
+        })
         .finish()
         .await?;
     }
@@ -672,61 +681,20 @@ fn make_download_progress() -> ProgressBar {
     pb
 }
 
-// pub async fn show_download_progress(
-//     recv: async_channel::Receiver<DownloadProgress>,
-//     total_size: u64,
-// ) -> anyhow::Result<()> {
-//     let mp = MultiProgress::new();
-//     mp.set_draw_target(ProgressDrawTarget::stderr());
-//     let op = mp.add(make_download_progress());
-//     op.set_message(format!("{} Connecting ...\n", style("[1/3]").bold().dim()));
-//     let mut total_done = 0;
-//     let mut sizes = BTreeMap::new();
-//     loop {
-//         let x = recv.recv().await;
-//         match x {
-//             Ok(DownloadProgress::Connected) => {
-//                 op.set_message(format!("{} Requesting ...\n", style("[2/3]").bold().dim()));
-//             }
-//             Ok(DownloadProgress::FoundHashSeq { children, .. }) => {
-//                 op.set_message(format!(
-//                     "{} Downloading {} blob(s)\n",
-//                     style("[3/3]").bold().dim(),
-//                     children + 1,
-//                 ));
-//                 op.set_length(total_size);
-//                 op.reset();
-//             }
-//             Ok(DownloadProgress::Found { id, size, .. }) => {
-//                 sizes.insert(id, size);
-//             }
-//             Ok(DownloadProgress::Progress { offset, .. }) => {
-//                 op.set_position(total_done + offset);
-//             }
-//             Ok(DownloadProgress::Done { id }) => {
-//                 total_done += sizes.remove(&id).unwrap_or_default();
-//             }
-//             Ok(DownloadProgress::AllDone(stats)) => {
-//                 op.finish_and_clear();
-//                 eprintln!(
-//                     "Transferred {} in {}, {}/s",
-//                     HumanBytes(stats.bytes_read),
-//                     HumanDuration(stats.elapsed),
-//                     HumanBytes((stats.bytes_read as f64 / stats.elapsed.as_secs_f64()) as u64)
-//                 );
-//                 break;
-//             }
-//             Ok(DownloadProgress::Abort(e)) => {
-//                 anyhow::bail!("download aborted: {e:?}");
-//             }
-//             Err(e) => {
-//                 anyhow::bail!("error reading progress: {e:?}");
-//             }
-//             _ => {}
-//         }
-//     }
-//     Ok(())
-// }
+pub async fn show_download_progress(
+    mut recv: mpsc::Receiver<u64>,
+    total_size: u64,
+) -> anyhow::Result<()> {
+    let mp = MultiProgress::new();
+    mp.set_draw_target(ProgressDrawTarget::stderr());
+    let op = mp.add(make_download_progress());
+    op.set_message(format!("{} Connecting ...\n", style("[1/3]").bold().dim()));
+    op.set_length(total_size);
+    while let Some(offset) = recv.recv().await {
+        op.set_position(offset);
+    }
+    Ok(())
+}
 
 fn show_get_error(e: anyhow::Error) -> anyhow::Error {
     if let Some(err) = e.downcast_ref::<DecodeError>() {
@@ -829,9 +797,11 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
             HumanBytes(total_size)
         );
     }
-    let stats = blobs2::get::db::get_all(connection, hash_and_format, &db)
-        .await
-        .map_err(|e| show_get_error(anyhow::anyhow!(e)))?;
+    let (tx, rx) = mpsc::channel(32);
+    let get = blobs2::get::db::get_all(connection, hash_and_format, &db, Some(tx.into()));
+    let task = tokio::spawn(show_download_progress(rx, total_size));
+    let stats = get.await.map_err(show_get_error)?;
+    task.await.ok();
     let collection = Collection::load(hash_and_format.hash, db.as_ref()).await?;
     if args.common.verbose > 0 {
         for (name, hash) in collection.iter() {
@@ -851,7 +821,10 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
             total_files,
             HumanBytes(payload_size),
             HumanDuration(stats.elapsed),
-            HumanBytes((stats.bytes_read as f64 / stats.elapsed.as_secs_f64()) as u64),
+            HumanBytes(
+                ((stats.payload_bytes_read + stats.other_bytes_read) as f64
+                    / stats.elapsed.as_secs_f64()) as u64
+            ),
         );
     }
     Ok(())

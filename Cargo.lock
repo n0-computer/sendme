@@ -2058,12 +2058,11 @@ dependencies = [
 [[package]]
 name = "irpc"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d858536bbc79df36e5f73620241cd560ba176bed614b1ad8a9aa8dadb4e84e81"
 dependencies = [
  "anyhow",
  "futures-buffered",
  "iroh-quinn",
+ "n0-future",
  "postcard",
  "rcgen",
  "rustls",

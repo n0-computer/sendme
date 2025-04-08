@@ -12,7 +12,7 @@ use std::{
 use anyhow::Context;
 use blobs2::{
     api::{
-        blobs::{ExportMode, ExportPath, ImportMode, ImportPath, ImportPathOptions, ImportProgress},
+        blobs::{ExportMode, ExportPath, ExportProgress, ImportMode, ImportPath, ImportPathOptions, ImportProgress},
         Scope, Store,
     },
     format::collection::Collection,
@@ -43,6 +43,7 @@ use n0_future::{pin, stream, StreamExt};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tokio::{select, sync::mpsc};
+use tracing::trace;
 use walkdir::WalkDir;
 
 /// Send a file or directory between two machines, using blake3 verified streaming.
@@ -400,7 +401,7 @@ pub fn canonicalized_path_to_string(
 /// If the input is a directory, the collection contains all the files in the
 /// directory.
 async fn import(path: PathBuf, db: &Store, mp: &mut MultiProgress) -> anyhow::Result<(TempTag, u64, Collection)> {
-    let parallelism = 1; // num_cpus::get();
+    let parallelism = num_cpus::get();
     let path = path.canonicalize()?;
     anyhow::ensure!(path.exists(), "path {} does not exist", path.display());
     let root = path.parent().context("context get parent")?;
@@ -446,18 +447,20 @@ async fn import(path: PathBuf, db: &Store, mp: &mut MultiProgress) -> anyhow::Re
                     .progress_chars("#>-"),
                 );
                 pb.set_message(format!("copying {name}"));
-                let mut import = db
+                let import = db
                     .add_path_with_opts(ImportPathOptions {
                         path,
                         mode: ImportMode::TryReference,
                         format: BlobFormat::Raw,
-                    }).stream().await?;
+                    });
+                let mut stream = import.stream().await?;
+                let mut item_size = 0;
                 let temp_tag = loop {
-                    let item = import.next().await.context("import stream ended without a tag")?;
-                    println!("importing {name}");
-                    println!("got item {item:?}");
+                    let item = stream.next().await.context("import stream ended without a tag")?;
+                    trace!("importing {name} {item:?}");
                     match item {
                         ImportProgress::Size { size } => {
+                            item_size = size;
                             pb.set_length(size);
                         }
                         ImportProgress::CopyProgress { offset } => {
@@ -480,16 +483,16 @@ async fn import(path: PathBuf, db: &Store, mp: &mut MultiProgress) -> anyhow::Re
                         }
                     }
                 };
-                anyhow::Ok((name, temp_tag, 0))
+                anyhow::Ok((name, temp_tag, item_size))
             }
         })
+        // .then(|x| x)
         .buffered_unordered(parallelism)
         .collect::<Vec<_>>()
         .await
         .into_iter()
         .collect::<anyhow::Result<Vec<_>>>()?;
-    println!("done importing");
-    mp.clear()?;
+    op.finish_and_clear();
     names_and_tags.sort_by(|(a, _, _), (b, _, _)| a.cmp(b));
     // total size of all files
     let size = names_and_tags.iter().map(|(_, _, size)| *size).sum::<u64>();
@@ -516,7 +519,7 @@ fn get_export_path(root: &Path, name: &str) -> anyhow::Result<PathBuf> {
     Ok(path)
 }
 
-async fn export(db: &Store, collection: Collection) -> anyhow::Result<()> {
+async fn export(db: &Store, collection: Collection, mp: &mut MultiProgress) -> anyhow::Result<()> {
     let root = std::env::current_dir()?;
     for (name, hash) in collection.iter() {
         let target = get_export_path(&root, name)?;
@@ -528,18 +531,38 @@ async fn export(db: &Store, collection: Collection) -> anyhow::Result<()> {
             eprintln!("You can remove the file or directory and try again. The download will not be repeated.");
             anyhow::bail!("target {} already exists", target.display());
         }
-        println!(
-            "exporting {} to {}",
-            print_hash(hash, Format::Hex),
-            target.display()
-        );
-        db.export_with_opts(ExportPath {
+        let mut stream = db.export_with_opts(ExportPath {
             hash: *hash,
             target,
             mode: ExportMode::TryReference,
         })
-        .finish()
-        .await?;
+        .stream()
+        .await;
+        let pb = mp.add(ProgressBar::hidden());
+        pb.set_style(
+            ProgressStyle::with_template(
+                "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}",
+            )?
+            .progress_chars("#>-"),
+        );
+        pb.set_message(format!("exporting {}", name));
+        while let Some(item) = stream.next().await {
+            match item {
+                ExportProgress::Size { size } => {
+                    pb.set_length(size);
+                }
+                ExportProgress::CopyProgress { offset } => {
+                    pb.set_position(offset);
+                }
+                ExportProgress::Done => {
+                    pb.finish_and_clear();
+                }
+                ExportProgress::Error { cause } => {
+                    pb.finish_and_clear();
+                    anyhow::bail!("error exporting {}: {}", name, cause);
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -668,6 +691,8 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
 
     let endpoint = builder.bind().await?;
     let mut mp = MultiProgress::new();
+    // uncomment for debugging without the progress bar overwriting the output
+    // mp.set_draw_target(ProgressDrawTarget::hidden());
     let store = blobs2::store::fs::FsStore::load(&blobs_data_dir).await?;
     let blobs = Blobs::new(&store, endpoint.clone());
 
@@ -729,17 +754,17 @@ fn make_download_progress() -> ProgressBar {
 }
 
 pub async fn show_download_progress(
+    mp: MultiProgress,
     mut recv: mpsc::Receiver<u64>,
     total_size: u64,
 ) -> anyhow::Result<()> {
-    let mp = MultiProgress::new();
-    mp.set_draw_target(ProgressDrawTarget::stderr());
     let op = mp.add(make_download_progress());
     op.set_message(format!("{} Connecting ...\n", style("[1/3]").bold().dim()));
     op.set_length(total_size);
     while let Some(offset) = recv.recv().await {
         op.set_position(offset);
     }
+    op.finish_and_clear();
     Ok(())
 }
 
@@ -811,7 +836,8 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     let dir_name = format!(".sendme-get-{}", ticket.hash().to_hex());
     let iroh_data_dir = std::env::current_dir()?.join(dir_name);
     let db = blobs2::store::fs::FsStore::load(&iroh_data_dir).await?;
-    let mp = MultiProgress::new();
+    let mut mp: MultiProgress = MultiProgress::new();
+    mp.set_draw_target(ProgressDrawTarget::stderr());
     let connect_progress = mp.add(ProgressBar::hidden());
     connect_progress.set_draw_target(ProgressDrawTarget::stderr());
     connect_progress.set_style(ProgressStyle::default_spinner());
@@ -846,7 +872,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     }
     let (tx, rx) = mpsc::channel(32);
     let get = blobs2::get::db::get_all(connection, hash_and_format, &db, Some(tx.into()));
-    let task = tokio::spawn(show_download_progress(rx, total_size));
+    let task = tokio::spawn(show_download_progress(mp.clone(), rx, total_size));
     let stats = get.await.map_err(show_get_error)?;
     task.await.ok();
     let collection = Collection::load(hash_and_format.hash, db.as_ref()).await?;
@@ -857,10 +883,10 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     }
     if let Some((name, _)) = collection.iter().next() {
         if let Some(first) = name.split('/').next() {
-            println!("downloading to: {};", first);
+            println!("downloading to {}", first);
         }
     }
-    export(&db, collection).await?;
+    export(&db, collection, &mut mp).await?;
     tokio::fs::remove_dir_all(iroh_data_dir).await?;
     if args.common.verbose > 0 {
         println!(

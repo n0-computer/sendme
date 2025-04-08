@@ -22,7 +22,8 @@ derive_more = { version = "1.0.0", features = [
     "display",
     "from_str"
 ] }
-futures-buffered = "0.2.4"
+# I had some issues with futures-buffered 0.2.9
+futures-buffered = "0.2.11"
 futures-lite = "2.3.0"
 indicatif = "0.17.7"
 blobs2 = { path = "../blobs2" }

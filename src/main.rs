@@ -1,6 +1,7 @@
 //! Command line arguments.
 
 use std::{
+    collections::BTreeMap,
     fmt::{Display, Formatter},
     net::{SocketAddrV4, SocketAddrV6},
     path::{Component, Path, PathBuf},
@@ -12,8 +13,10 @@ use std::{
 use anyhow::Context;
 use blobs2::{
     api::{
-        blobs::{ExportMode, ExportPath, ExportProgress, ImportMode, ImportPath, ImportPathOptions, ImportProgress},
-        Scope, Store,
+        blobs::{
+            ExportMode, ExportPath, ExportProgress, ImportMode, ImportPathOptions, ImportProgress,
+        },
+        Store,
     },
     format::collection::Collection,
     get::{
@@ -21,6 +24,7 @@ use blobs2::{
         request::get_hash_seq_and_sizes,
     },
     net_protocol::Blobs,
+    provider::{self, Event},
     ticket::BlobTicket,
     util::temp_tag::TempTag,
     BlobFormat, Hash, HashAndFormat,
@@ -39,11 +43,11 @@ use iroh::{
     discovery::{dns::DnsDiscovery, pkarr::PkarrPublisher},
     Endpoint, NodeAddr, RelayMap, RelayMode, RelayUrl, SecretKey,
 };
-use n0_future::{pin, stream, StreamExt};
+use n0_future::{pin, stream, task::AbortOnDropHandle, StreamExt};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tokio::{select, sync::mpsc};
-use tracing::trace;
+use tracing::{error, trace};
 use walkdir::WalkDir;
 
 /// Send a file or directory between two machines, using blake3 verified streaming.
@@ -331,68 +335,6 @@ pub fn canonicalized_path_to_string(
     Ok(path_str)
 }
 
-// pub async fn show_ingest_progress(
-//     recv: async_channel::Receiver<ImportProgress>,
-// ) -> anyhow::Result<()> {
-//     let mp = MultiProgress::new();
-//     mp.set_draw_target(ProgressDrawTarget::stderr());
-//     let op = mp.add(ProgressBar::hidden());
-//     op.set_style(
-//         ProgressStyle::default_spinner().template("{spinner:.green} [{elapsed_precise}] {msg}")?,
-//     );
-//     // op.set_message(format!("{} Ingesting ...\n", style("[1/2]").bold().dim()));
-//     // op.set_length(total_files);
-//     let mut names = BTreeMap::new();
-//     let mut sizes = BTreeMap::new();
-//     let mut pbs = BTreeMap::new();
-//     loop {
-//         let event = recv.recv().await;
-//         match event {
-//             Ok(ImportProgress::Found { id, name }) => {
-//                 names.insert(id, name);
-//             }
-//             Ok(ImportProgress::Size { id, size }) => {
-//                 sizes.insert(id, size);
-//                 let total_size = sizes.values().sum::<u64>();
-//                 op.set_message(format!(
-//                     "{} Ingesting {} files, {}\n",
-//                     style("[1/2]").bold().dim(),
-//                     sizes.len(),
-//                     HumanBytes(total_size)
-//                 ));
-//                 let name = names.get(&id).cloned().unwrap_or_default();
-//                 let pb = mp.add(ProgressBar::hidden());
-//                 pb.set_style(ProgressStyle::with_template(
-//                     "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}",
-//                 )?.progress_chars("#>-"));
-//                 pb.set_message(format!("{} {}", style("[2/2]").bold().dim(), name));
-//                 pb.set_length(size);
-//                 pbs.insert(id, pb);
-//             }
-//             Ok(ImportProgress::OutboardProgress { id, offset }) => {
-//                 if let Some(pb) = pbs.get(&id) {
-//                     pb.set_position(offset);
-//                 }
-//             }
-//             Ok(ImportProgress::OutboardDone { id, .. }) => {
-//                 // you are not guaranteed to get any OutboardProgress
-//                 if let Some(pb) = pbs.remove(&id) {
-//                     pb.finish_and_clear();
-//                 }
-//             }
-//             Ok(ImportProgress::CopyProgress { .. }) => {
-//                 // we are not copying anything
-//             }
-//             Err(e) => {
-//                 op.set_message(format!("Error receiving progress: {e}"));
-//                 break;
-//             }
-//         }
-//     }
-//     op.finish_and_clear();
-//     Ok(())
-// }
-
 /// Import from a file or directory into the database.
 ///
 /// The returned tag always refers to a collection. If the input is a file, this
@@ -400,7 +342,11 @@ pub fn canonicalized_path_to_string(
 ///
 /// If the input is a directory, the collection contains all the files in the
 /// directory.
-async fn import(path: PathBuf, db: &Store, mp: &mut MultiProgress) -> anyhow::Result<(TempTag, u64, Collection)> {
+async fn import(
+    path: PathBuf,
+    db: &Store,
+    mp: &mut MultiProgress,
+) -> anyhow::Result<(TempTag, u64, Collection)> {
     let parallelism = num_cpus::get();
     let path = path.canonicalize()?;
     anyhow::ensure!(path.exists(), "path {} does not exist", path.display());
@@ -459,25 +405,25 @@ async fn import(path: PathBuf, db: &Store, mp: &mut MultiProgress) -> anyhow::Re
                     let item = stream.next().await.context("import stream ended without a tag")?;
                     trace!("importing {name} {item:?}");
                     match item {
-                        ImportProgress::Size { size } => {
+                        ImportProgress::Size(size) => {
                             item_size = size;
                             pb.set_length(size);
                         }
-                        ImportProgress::CopyProgress { offset } => {
+                        ImportProgress::CopyProgress(offset) => {
                             pb.set_position(offset);
                         }
-                        ImportProgress::CopyDone { .. } => {
+                        ImportProgress::CopyDone => {
                             pb.set_position(0);
                             pb.set_message(format!("computing outboard {name}"));
                         }
-                        ImportProgress::OutboardProgress { offset } => {
+                        ImportProgress::OutboardProgress(offset ) => {
                             pb.set_position(offset);
                         }
-                        ImportProgress::Error { cause } => {
+                        ImportProgress::Error(cause ) => {
                             pb.finish_and_clear();
                             anyhow::bail!("error importing {}: {}", name, cause);
                         }
-                        ImportProgress::Done { tt } => {
+                        ImportProgress::Done(tt ) => {
                             pb.finish_and_clear();
                             break tt;
                         }
@@ -531,13 +477,14 @@ async fn export(db: &Store, collection: Collection, mp: &mut MultiProgress) -> a
             eprintln!("You can remove the file or directory and try again. The download will not be repeated.");
             anyhow::bail!("target {} already exists", target.display());
         }
-        let mut stream = db.export_with_opts(ExportPath {
-            hash: *hash,
-            target,
-            mode: ExportMode::TryReference,
-        })
-        .stream()
-        .await;
+        let mut stream = db
+            .export_with_opts(ExportPath {
+                hash: *hash,
+                target,
+                mode: ExportMode::TryReference,
+            })
+            .stream()
+            .await;
         let pb = mp.add(ProgressBar::hidden());
         pb.set_style(
             ProgressStyle::with_template(
@@ -548,16 +495,16 @@ async fn export(db: &Store, collection: Collection, mp: &mut MultiProgress) -> a
         pb.set_message(format!("exporting {}", name));
         while let Some(item) = stream.next().await {
             match item {
-                ExportProgress::Size { size } => {
+                ExportProgress::Size(size) => {
                     pb.set_length(size);
                 }
-                ExportProgress::CopyProgress { offset } => {
+                ExportProgress::CopyProgress(offset) => {
                     pb.set_position(offset);
                 }
                 ExportProgress::Done => {
                     pb.finish_and_clear();
                 }
-                ExportProgress::Error { cause } => {
+                ExportProgress::Error(cause) => {
                     pb.finish_and_clear();
                     anyhow::bail!("error exporting {}: {}", name, cause);
                 }
@@ -567,92 +514,131 @@ async fn export(db: &Store, collection: Collection, mp: &mut MultiProgress) -> a
     Ok(())
 }
 
-#[derive(Debug, Clone)]
-struct SendStatus {
-    /// the multiprogress bar
+#[derive(Debug)]
+struct PerConnectionProgress {
+    main: ProgressBar,
+    requests: BTreeMap<u64, ProgressBar>,
+}
+
+async fn show_provide_progress(
     mp: MultiProgress,
-}
-
-impl SendStatus {
-    fn new() -> Self {
-        let mp = MultiProgress::new();
-        mp.set_draw_target(ProgressDrawTarget::stderr());
-        Self { mp }
-    }
-
-    fn new_client(&self) -> ClientStatus {
-        let current = self.mp.add(ProgressBar::hidden());
-        current.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.green} [{elapsed_precise}] {msg}")
-                .unwrap(),
-        );
-        current.enable_steady_tick(Duration::from_millis(100));
-        current.set_message("waiting for requests");
-        ClientStatus {
-            current: current.into(),
+    mut recv: mpsc::Receiver<provider::Event>,
+) -> anyhow::Result<()> {
+    let mut connections = BTreeMap::new();
+    while let Some(item) = recv.recv().await {
+        trace!("got event {item:?}");
+        match item {
+            Event::ClientConnected {
+                connection_id,
+                node_id,
+            } => {
+                let pb = mp.add(ProgressBar::hidden());
+                pb.set_style(
+                    indicatif::ProgressStyle::default_bar()
+                        .template("{msg}") // Only display the message
+                        .unwrap(),
+                );
+                pb.set_message(format!("{} {}", node_id, connection_id));
+                connections.insert(
+                    connection_id,
+                    PerConnectionProgress {
+                        main: pb,
+                        requests: BTreeMap::new(),
+                    },
+                );
+            }
+            Event::ConnectionClosed { connection_id } => {
+                let Some(connection) = connections.remove(&connection_id) else {
+                    error!("got close for unknown connection {connection_id}");
+                    continue;
+                };
+                for pb in connection.requests.values() {
+                    pb.finish_and_clear();
+                }
+                connection.main.finish_and_clear();
+            }
+            Event::GetRequestReceived {
+                connection_id,
+                request_id,
+                hash,
+                ..
+            } => {
+                let pb = mp.add(ProgressBar::hidden());
+                pb.set_style(
+                    ProgressStyle::with_template(
+                        "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}",
+                    )?
+                    .progress_chars("#>-"),
+                );
+                pb.set_message(format!("{} {}", request_id, hash));
+                let Some(connection) = connections.get_mut(&connection_id) else {
+                    error!("got request for unknown connection {connection_id}");
+                    continue;
+                };
+                connection.requests.insert(request_id, pb);
+            }
+            Event::TransferStarted {
+                connection_id,
+                request_id,
+                hash,
+                size,
+                index,
+            } => {
+                let Some(connection) = connections.get_mut(&connection_id) else {
+                    error!("got request for unknown connection {connection_id}");
+                    continue;
+                };
+                let Some(pb) = connection.requests.get_mut(&request_id) else {
+                    error!("got update for unknown request {request_id}");
+                    continue;
+                };
+                pb.set_message(format!("    {} {} {}", request_id, index, hash.fmt_short()));
+                pb.set_length(size);
+            }
+            Event::TransferProgress {
+                connection_id,
+                request_id,
+                end_offset,
+                ..
+            } => {
+                let Some(connection) = connections.get_mut(&connection_id) else {
+                    error!("got request for unknown connection {connection_id}");
+                    continue;
+                };
+                let Some(pb) = connection.requests.get_mut(&request_id) else {
+                    error!("got update for unknown request {request_id}");
+                    continue;
+                };
+                pb.set_position(end_offset);
+            }
+            Event::TransferCompleted {
+                connection_id,
+                request_id,
+                stats,
+            } => {
+                if let Some(msg) = connections.get_mut(&connection_id) {
+                    if let Some(pb) = msg.requests.remove(&request_id) {
+                        // todo: show stats and hide after a delay
+                        pb.finish_and_clear();
+                    }
+                }
+            }
+            Event::TransferAborted {
+                connection_id,
+                request_id,
+                stats,
+            } => {
+                if let Some(msg) = connections.get_mut(&connection_id) {
+                    if let Some(pb) = msg.requests.remove(&request_id) {
+                        // todo: show stats and hide after a delay
+                        pb.finish_and_clear();
+                    }
+                }
+            }
         }
     }
+    Ok(())
 }
-
-#[derive(Debug, Clone)]
-struct ClientStatus {
-    current: Arc<ProgressBar>,
-}
-
-impl Drop for ClientStatus {
-    fn drop(&mut self) {
-        if Arc::strong_count(&self.current) == 1 {
-            self.current.finish_and_clear();
-        }
-    }
-}
-
-// impl CustomEventSender for ClientStatus {
-//     fn send(&self, event: iroh_blobs::provider::Event) -> Boxed<()> {
-//         self.try_send(event);
-//         Box::pin(std::future::ready(()))
-//     }
-
-//     fn try_send(&self, event: provider::Event) {
-//         tracing::info!("{:?}", event);
-//         let msg = match event {
-//             provider::Event::ClientConnected { connection_id } => {
-//                 Some(format!("{} got connection", connection_id))
-//             }
-//             provider::Event::TransferBlobCompleted {
-//                 connection_id,
-//                 hash,
-//                 index,
-//                 size,
-//                 ..
-//             } => Some(format!(
-//                 "{} transfer blob completed {} {} {}",
-//                 connection_id,
-//                 hash,
-//                 index,
-//                 HumanBytes(size)
-//             )),
-//             provider::Event::TransferCompleted {
-//                 connection_id,
-//                 stats,
-//                 ..
-//             } => Some(format!(
-//                 "{} transfer completed {} {}",
-//                 connection_id,
-//                 stats.send.write_bytes.size,
-//                 HumanDuration(stats.send.write_bytes.stats.duration)
-//             )),
-//             provider::Event::TransferAborted { connection_id, .. } => {
-//                 Some(format!("{} transfer completed", connection_id))
-//             }
-//             _ => None,
-//         };
-//         if let Some(msg) = msg {
-//             self.current.set_message(msg);
-//         }
-//     }
-// }
 
 async fn send(args: SendArgs) -> anyhow::Result<()> {
     let secret_key = get_or_create_secret(args.common.verbose > 0)?;
@@ -689,12 +675,18 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
 
     tokio::fs::create_dir_all(&blobs_data_dir).await?;
 
+    let (progress_tx, progress_rx) = mpsc::channel(32);
     let endpoint = builder.bind().await?;
     let mut mp = MultiProgress::new();
+    let mp2 = mp.clone();
+    let progress = AbortOnDropHandle::new(n0_future::task::spawn(show_provide_progress(
+        mp2,
+        progress_rx,
+    )));
     // uncomment for debugging without the progress bar overwriting the output
     // mp.set_draw_target(ProgressDrawTarget::hidden());
     let store = blobs2::store::fs::FsStore::load(&blobs_data_dir).await?;
-    let blobs = Blobs::new(&store, endpoint.clone());
+    let blobs = Blobs::new(&store, endpoint.clone(), Some(progress_tx));
 
     let router = iroh::protocol::Router::builder(endpoint)
         .accept(blobs2::ALPN, blobs.clone())
@@ -736,6 +728,11 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     println!("shutting down");
     tokio::time::timeout(Duration::from_secs(2), router.shutdown()).await??;
     tokio::fs::remove_dir_all(blobs_data_dir).await?;
+    // drop everything that owns blobs to close the progress sender
+    drop(router);
+    drop(blobs);
+    // await progress completion so the progress bar is cleared
+    progress.await.ok();
 
     Ok(())
 }

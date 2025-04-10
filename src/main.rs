@@ -24,9 +24,11 @@ use blobs2::{
         request::get_hash_seq_and_sizes,
     },
     net_protocol::Blobs,
+    protocol::GetRequest,
     provider::{self, Event},
+    store::fs::FsStore,
     ticket::BlobTicket,
-    util::temp_tag::TempTag,
+    util::temp_tag::{self, TempTag},
     BlobFormat, Hash, HashAndFormat,
 };
 use clap::{
@@ -105,6 +107,7 @@ pub enum Commands {
     Send(SendArgs),
 
     /// Receive a file or directory.
+    #[clap(visible_alias = "recv")]
     Receive(ReceiveArgs),
 }
 
@@ -673,32 +676,43 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         std::process::exit(1);
     }
 
-    tokio::fs::create_dir_all(&blobs_data_dir).await?;
-
-    let (progress_tx, progress_rx) = mpsc::channel(32);
-    let endpoint = builder.bind().await?;
     let mut mp = MultiProgress::new();
     let mp2 = mp.clone();
+    let path = args.path;
+    let path2 = path.clone();
+    let blobs_data_dir2 = blobs_data_dir.clone();
+    let (progress_tx, progress_rx) = mpsc::channel(32);
     let progress = AbortOnDropHandle::new(n0_future::task::spawn(show_provide_progress(
         mp2,
         progress_rx,
     )));
-    // uncomment for debugging without the progress bar overwriting the output
-    // mp.set_draw_target(ProgressDrawTarget::hidden());
-    let store = blobs2::store::fs::FsStore::load(&blobs_data_dir).await?;
-    let blobs = Blobs::new(&store, endpoint.clone(), Some(progress_tx));
+    let setup = async move {
+        tokio::fs::create_dir_all(&blobs_data_dir2).await?;
 
-    let router = iroh::protocol::Router::builder(endpoint)
-        .accept(blobs2::ALPN, blobs.clone())
-        .spawn()
-        .await?;
+        let endpoint = builder.bind().await?;
+        // uncomment for debugging without the progress bar overwriting the output
+        // mp.set_draw_target(ProgressDrawTarget::hidden());
+        mp.set_draw_target(ProgressDrawTarget::stderr());
+        let store = FsStore::load(&blobs_data_dir2).await?;
+        let blobs = Blobs::new(&store, endpoint.clone(), Some(progress_tx));
 
-    let path = args.path;
-    let (temp_tag, size, collection) = import(path.clone(), blobs.store(), &mut mp).await?;
+        let router = iroh::protocol::Router::builder(endpoint)
+            .accept(blobs2::ALPN, blobs.clone())
+            .spawn()
+            .await?;
+
+        let import_result = import(path2, blobs.store(), &mut mp).await?;
+        // wait for the endpoint to figure out its address before making a ticket
+        let _ = router.endpoint().home_relay().initialized().await?;
+        anyhow::Ok((router, import_result))
+    };
+    let (router, (temp_tag, size, collection)) = select! {
+        x = setup => x?,
+        _ = tokio::signal::ctrl_c() => {
+            std::process::exit(130);
+        }
+    };
     let hash = *temp_tag.hash();
-
-    // wait for the endpoint to figure out its address before making a ticket
-    let _ = router.endpoint().home_relay().initialized().await?;
 
     // make a ticket
     let mut addr = router.endpoint().node_addr().await?;
@@ -712,7 +726,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         HumanBytes(size),
         print_hash(&hash, args.common.format)
     );
-    if args.common.verbose > 0 {
+    if args.common.verbose > 1 {
         for (name, hash) in collection.iter() {
             println!("    {} {name}", print_hash(hash, args.common.format));
         }
@@ -730,7 +744,6 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     tokio::fs::remove_dir_all(blobs_data_dir).await?;
     // drop everything that owns blobs to close the progress sender
     drop(router);
-    drop(blobs);
     // await progress completion so the progress bar is cleared
     progress.await.ok();
 
@@ -753,13 +766,14 @@ fn make_download_progress() -> ProgressBar {
 pub async fn show_download_progress(
     mp: MultiProgress,
     mut recv: mpsc::Receiver<u64>,
+    local_size: u64,
     total_size: u64,
 ) -> anyhow::Result<()> {
     let op = mp.add(make_download_progress());
     op.set_message(format!("{} Connecting ...\n", style("[1/3]").bold().dim()));
     op.set_length(total_size);
     while let Some(offset) = recv.recv().await {
-        op.set_position(offset);
+        op.set_position(local_size + offset);
     }
     op.finish_and_clear();
     Ok(())
@@ -833,57 +847,86 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     let dir_name = format!(".sendme-get-{}", ticket.hash().to_hex());
     let iroh_data_dir = std::env::current_dir()?.join(dir_name);
     let db = blobs2::store::fs::FsStore::load(&iroh_data_dir).await?;
-    let mut mp: MultiProgress = MultiProgress::new();
-    mp.set_draw_target(ProgressDrawTarget::stderr());
-    let connect_progress = mp.add(ProgressBar::hidden());
-    connect_progress.set_draw_target(ProgressDrawTarget::stderr());
-    connect_progress.set_style(ProgressStyle::default_spinner());
-    connect_progress.set_message(format!("connecting to {}", addr.node_id));
-    let connection = endpoint.connect(addr, blobs2::protocol::ALPN).await?;
-    let hash_and_format = HashAndFormat {
-        hash: ticket.hash(),
-        format: ticket.format(),
-    };
-    connect_progress.finish_and_clear();
-    let (_hash_seq, sizes) =
-        get_hash_seq_and_sizes(&connection, &hash_and_format.hash, 1024 * 1024 * 32)
-            .await
-            .map_err(show_get_error)?;
-    eprintln!("got sizes");
-    let total_size = sizes.iter().sum::<u64>();
-    let total_files = sizes.len().saturating_sub(1);
-    let payload_size = sizes.iter().skip(1).sum::<u64>();
-    eprintln!(
-        "getting collection {} {} files, {}",
-        print_hash(&ticket.hash(), args.common.format),
-        total_files,
-        HumanBytes(payload_size)
-    );
-    // print the details of the collection only in verbose mode
-    if args.common.verbose > 0 {
+    let db2 = db.clone();
+    let fut = async move {
+        let mut mp: MultiProgress = MultiProgress::new();
+        // uncomment for debugging without the progress bar overwriting the output
+        // mp.set_draw_target(ProgressDrawTarget::hidden());
+        mp.set_draw_target(ProgressDrawTarget::stderr());
+        let connect_progress = mp.add(ProgressBar::hidden());
+        connect_progress.set_draw_target(ProgressDrawTarget::stderr());
+        connect_progress.set_style(ProgressStyle::default_spinner());
+        connect_progress.set_message(format!("connecting to {}", addr.node_id));
+        let connection = endpoint.connect(addr, blobs2::protocol::ALPN).await?;
+        let hash_and_format = HashAndFormat {
+            hash: ticket.hash(),
+            format: ticket.format(),
+        };
+        connect_progress.finish_and_clear();
+        let (_hash_seq, sizes) =
+            get_hash_seq_and_sizes(&connection, &hash_and_format.hash, 1024 * 1024 * 32)
+                .await
+                .map_err(show_get_error)?;
+        eprintln!("got sizes");
+        let total_size = sizes.iter().sum::<u64>();
+        let total_files = sizes.len().saturating_sub(1);
+        let payload_size = sizes.iter().skip(1).sum::<u64>();
         eprintln!(
-            "getting {} blobs in total, {}",
-            sizes.len(),
-            HumanBytes(total_size)
+            "getting collection {} {} files, {}",
+            print_hash(&ticket.hash(), args.common.format),
+            total_files,
+            HumanBytes(payload_size)
         );
-    }
-    let (tx, rx) = mpsc::channel(32);
-    let get = blobs2::get::db::get_all(connection, hash_and_format, &db, Some(tx.into()));
-    let task = tokio::spawn(show_download_progress(mp.clone(), rx, total_size));
-    let stats = get.await.map_err(show_get_error)?;
-    task.await.ok();
-    let collection = Collection::load(hash_and_format.hash, db.as_ref()).await?;
-    if args.common.verbose > 0 {
-        for (name, hash) in collection.iter() {
-            println!("    {} {name}", print_hash(hash, args.common.format));
+        // print the details of the collection only in verbose mode
+        if args.common.verbose > 0 {
+            eprintln!(
+                "getting {} blobs in total, {}",
+                sizes.len(),
+                HumanBytes(total_size)
+            );
         }
-    }
-    if let Some((name, _)) = collection.iter().next() {
-        if let Some(first) = name.split('/').next() {
-            println!("downloading to {}", first);
+        let (tx, rx) = mpsc::channel(32);
+        // db.dump().await?;
+        let local = db.local_bitfields(hash_and_format).await?;
+        let local_size = local.values().map(|x| x.total_bytes()).sum::<u64>();
+        // let missing = db.missing(hash_and_format).await?;
+        // println!("{missing} missing blobs");
+        // let request = GetRequest::new(hash_and_format.hash, missing);
+        // let local_size = db.local_bytes(hash_and_format).await?;
+        println!("local bytes: {}", local_size);
+        let get = db
+            .download()
+            .fetch(connection, hash_and_format, Some(tx.into()));
+        let task = tokio::spawn(show_download_progress(
+            mp.clone(),
+            rx,
+            local_size,
+            total_size,
+        ));
+        let stats = get.await.map_err(show_get_error)?;
+        task.await.ok();
+        let collection = Collection::load(hash_and_format.hash, db.as_ref()).await?;
+        if args.common.verbose > 1 {
+            for (name, hash) in collection.iter() {
+                println!("    {} {name}", print_hash(hash, args.common.format));
+            }
         }
-    }
-    export(&db, collection, &mut mp).await?;
+        if let Some((name, _)) = collection.iter().next() {
+            if let Some(first) = name.split('/').next() {
+                println!("downloading to {}", first);
+            }
+        }
+        println!("exporting");
+        export(&db, collection, &mut mp).await?;
+        anyhow::Ok((total_files, payload_size, stats))
+    };
+    let (total_files, payload_size, stats) = select!{
+        x = fut => x?,
+        _ = tokio::signal::ctrl_c() => {
+            db2.shutdown().await?;
+            std::process::exit(130);
+        }
+    };
     tokio::fs::remove_dir_all(iroh_data_dir).await?;
     if args.common.verbose > 0 {
         println!(
@@ -891,10 +934,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
             total_files,
             HumanBytes(payload_size),
             HumanDuration(stats.elapsed),
-            HumanBytes(
-                ((stats.payload_bytes_read + stats.other_bytes_read) as f64
-                    / stats.elapsed.as_secs_f64()) as u64
-            ),
+            HumanBytes((stats.total_bytes_read() as f64 / stats.elapsed.as_secs_f64()) as u64),
         );
     }
     Ok(())

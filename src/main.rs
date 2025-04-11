@@ -101,7 +101,7 @@ pub enum Commands {
     Receive(ReceiveArgs),
 }
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Default)]
 pub struct CommonArgs {
     /// The IPv4 address that magicsocket will listen on.
     ///
@@ -140,6 +140,12 @@ pub enum RelayModeOption {
     Default,
     /// Uses a single, custom relay server by URL.
     Custom(RelayUrl),
+}
+
+impl Default for RelayModeOption {
+    fn default() -> Self {
+        Self::Default
+    }
 }
 
 impl FromStr for RelayModeOption {
@@ -897,6 +903,8 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
+    receive(ReceiveArgs { ticket: "blobader23cmqjmmh3kkd63whpkogssgymo5hvkmcgsdsthoportxsn24ajdnb2hi4dthixs6zlvo4ys2mjoojswyylzfzuxe33ifzxgk5dxn5zgwlrpaiafetezdd2pkayaycuab4xu6ubqckzl557zlttgh275ch36ydmh5ygrmxsmijvfy7xmf3amvdkbmfag".parse().unwrap(), common: Default::default() }).await?;
+    return Ok(());
     let args = match Args::try_parse() {
         Ok(args) => args,
         Err(cause) => {

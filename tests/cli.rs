@@ -150,3 +150,41 @@ fn send_send_current() {
     // attempting to send the current directory should fail
     assert_eq!(output.status.code(), Some(1));
 }
+
+#[test]
+fn send_recv_modified() {
+    let name = "somefile.bin";
+    let data = vec![0u8; 20000];
+    let data2 = vec![1u8; 20000];
+    // create src and tgt dir, and src file
+    let src_dir = tempfile::tempdir().unwrap();
+    let tgt_dir = tempfile::tempdir().unwrap();
+    let src_file = src_dir.path().join(name);
+    std::fs::write(&src_file, &data).unwrap();
+    let mut send_cmd = duct::cmd(
+        sendme_bin(),
+        ["send", src_file.as_os_str().to_str().unwrap()],
+    )
+    .dir(src_dir.path())
+    .env_remove("RUST_LOG") // disable tracing
+    .stderr_to_stdout()
+    .reader()
+    .unwrap();
+    let output = read_ascii_lines(3, &mut send_cmd).unwrap();
+    let output = String::from_utf8(output).unwrap();
+    let ticket = output.split_ascii_whitespace().last().unwrap();
+    let ticket = BlobTicket::from_str(ticket).unwrap();
+
+    // modify the file
+    std::fs::write(&src_file, &data2).unwrap();
+
+    // check that download fails
+    let receive_output = duct::cmd(sendme_bin(), ["receive", &ticket.to_string()])
+        .dir(tgt_dir.path())
+        .env_remove("RUST_LOG") // disable tracing
+        .stderr_to_stdout()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert_eq!(receive_output.status.code(), Some(1));
+}

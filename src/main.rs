@@ -1,5 +1,15 @@
 //! Command line arguments.
 
+use std::{
+    collections::BTreeMap,
+    fmt::{Display, Formatter},
+    net::{SocketAddrV4, SocketAddrV6},
+    path::{Component, Path, PathBuf},
+    str::FromStr,
+    sync::Arc,
+    time::Duration,
+};
+
 use anyhow::Context;
 use arboard::Clipboard;
 use clap::{
@@ -32,15 +42,6 @@ use iroh_blobs::{
 use n0_future::{future::Boxed, StreamExt};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::BTreeMap,
-    fmt::{Display, Formatter},
-    net::{SocketAddrV4, SocketAddrV6},
-    path::{Component, Path, PathBuf},
-    str::FromStr,
-    sync::Arc,
-    time::Duration,
-};
 use walkdir::WalkDir;
 
 /// Send a file or directory between two machines, using blake3 verified streaming.
@@ -98,6 +99,7 @@ pub enum Commands {
     Send(SendArgs),
 
     /// Receive a file or directory.
+    #[clap(visible_alias = "recv")]
     Receive(ReceiveArgs),
 }
 
@@ -608,6 +610,10 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
             "can not share twice from the same directory: {}",
             cwd.display(),
         );
+        std::process::exit(1);
+    }
+    if cwd.join(&args.path) == cwd {
+        println!("can not share from the current directory");
         std::process::exit(1);
     }
 

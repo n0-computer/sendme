@@ -136,3 +136,17 @@ fn send_recv_dir() {
         }
     }
 }
+
+#[test]
+fn send_send_current() {
+    let src_dir = tempfile::tempdir().unwrap();
+    let output = duct::cmd(sendme_bin(), ["send", "."])
+        .dir(src_dir.path())
+        .env_remove("RUST_LOG") // disable tracing
+        .stderr_to_stdout()
+        .unchecked()
+        .run()
+        .unwrap();
+    // attempting to send the current directory should fail
+    assert_eq!(output.status.code(), Some(1));
+}

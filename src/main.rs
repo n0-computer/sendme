@@ -1,7 +1,7 @@
 //! Command line arguments.
 
 use std::{
-    collections::BTreeMap,
+    collections::{btree_map::Range, BTreeMap},
     fmt::{Display, Formatter},
     net::{SocketAddrV4, SocketAddrV6},
     path::{Component, Path, PathBuf},
@@ -22,9 +22,10 @@ use blobs2::{
     get::{
         fsm::{AtBlobHeaderNextError, DecodeError},
         request::get_hash_seq_and_sizes,
+        Stats,
     },
     net_protocol::Blobs,
-    protocol::GetRequest,
+    protocol::{GetRequest, RangeSpecSeq},
     provider::{self, Event},
     store::fs::FsStore,
     ticket::BlobTicket,
@@ -132,6 +133,10 @@ pub struct CommonArgs {
 
     #[clap(short = 'v', long, action = clap::ArgAction::Count)]
     pub verbose: u8,
+
+    /// Suppress progress bars.
+    #[clap(long, default_value_t = false)]
+    pub no_progress: bool,
 
     /// The relay URL to use as a home relay,
     ///
@@ -690,9 +695,12 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         tokio::fs::create_dir_all(&blobs_data_dir2).await?;
 
         let endpoint = builder.bind().await?;
-        // uncomment for debugging without the progress bar overwriting the output
-        // mp.set_draw_target(ProgressDrawTarget::hidden());
-        mp.set_draw_target(ProgressDrawTarget::stderr());
+        let draw_target = if args.common.no_progress {
+            ProgressDrawTarget::hidden()
+        } else {
+            ProgressDrawTarget::stderr()
+        };
+        mp.set_draw_target(draw_target);
         let store = FsStore::load(&blobs_data_dir2).await?;
         let blobs = Blobs::new(&store, endpoint.clone(), Some(progress_tx));
 
@@ -848,63 +856,91 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     let iroh_data_dir = std::env::current_dir()?.join(dir_name);
     let db = blobs2::store::fs::FsStore::load(&iroh_data_dir).await?;
     let db2 = db.clone();
+    trace!("load done!");
     let fut = async move {
+        trace!("running");
         let mut mp: MultiProgress = MultiProgress::new();
-        // uncomment for debugging without the progress bar overwriting the output
-        // mp.set_draw_target(ProgressDrawTarget::hidden());
-        mp.set_draw_target(ProgressDrawTarget::stderr());
-        let connect_progress = mp.add(ProgressBar::hidden());
-        connect_progress.set_draw_target(ProgressDrawTarget::stderr());
-        connect_progress.set_style(ProgressStyle::default_spinner());
-        connect_progress.set_message(format!("connecting to {}", addr.node_id));
-        let connection = endpoint.connect(addr, blobs2::protocol::ALPN).await?;
-        let hash_and_format = HashAndFormat {
-            hash: ticket.hash(),
-            format: ticket.format(),
+        let draw_target = if args.common.no_progress {
+            ProgressDrawTarget::hidden()
+        } else {
+            ProgressDrawTarget::stderr()
         };
-        connect_progress.finish_and_clear();
-        let (_hash_seq, sizes) =
-            get_hash_seq_and_sizes(&connection, &hash_and_format.hash, 1024 * 1024 * 32)
-                .await
-                .map_err(show_get_error)?;
-        eprintln!("got sizes");
-        let total_size = sizes.iter().sum::<u64>();
-        let total_files = sizes.len().saturating_sub(1);
-        let payload_size = sizes.iter().skip(1).sum::<u64>();
-        eprintln!(
-            "getting collection {} {} files, {}",
-            print_hash(&ticket.hash(), args.common.format),
-            total_files,
-            HumanBytes(payload_size)
-        );
-        // print the details of the collection only in verbose mode
-        if args.common.verbose > 0 {
+        mp.set_draw_target(draw_target);
+        let hash_and_format = ticket.hash_and_format();
+        trace!("computing local");
+        let local = db.download().local(hash_and_format).await?;
+        trace!("local done");
+        let (stats, total_files, payload_size) = if !local.is_complete() {
+            trace!("{} not complete", hash_and_format.hash);
+            let connect_progress = mp.add(ProgressBar::hidden());
+            connect_progress.set_draw_target(ProgressDrawTarget::stderr());
+            connect_progress.set_style(ProgressStyle::default_spinner());
+            connect_progress.set_message(format!("connecting to {}", addr.node_id));
+            let connection = endpoint.connect(addr, blobs2::protocol::ALPN).await?;
+            connect_progress.finish_and_clear();
+            // // trace!("request to complete sizes: {:#?}", local.complete_sizes());
+            // db.download().execute_request(connection.clone(), local.complete_sizes(), None).await?;
+            // db.dump().await?;
+            // let local = db.download().local(hash_and_format).await?;
+            // // println!("{:#?}", local);
+            // trace!("{}", local.sizes().all(|x| x.is_some()));
+            // let meta_size = local.sizes().take(2).map(Option::unwrap).sum::<u64>();
+            // let total_files = local.children().unwrap() - 1;
+            // let payload_size = local.sizes().skip(2).map(Option::unwrap).sum::<u64>();
+            // let total_size = meta_size + payload_size;
+            let (_hash_seq, sizes) =
+                get_hash_seq_and_sizes(&connection, &hash_and_format.hash, 1024 * 1024 * 32, None)
+                    .await
+                    .map_err(show_get_error)?;
+            let total_size = sizes.iter().map(|x| *x).sum::<u64>();
+            let payload_size = sizes.iter().skip(2).map(|x| *x).sum::<u64>();
+            let total_files = (sizes.len().saturating_sub(1)) as u64;
+            eprintln!("got sizes");
             eprintln!(
-                "getting {} blobs in total, {}",
-                sizes.len(),
-                HumanBytes(total_size)
+                "getting collection {} {} files, {}",
+                print_hash(&ticket.hash(), args.common.format),
+                total_files,
+                HumanBytes(payload_size)
             );
-        }
-        let (tx, rx) = mpsc::channel(32);
-        // db.dump().await?;
-        let local = db.local_bitfields(hash_and_format).await?;
-        let local_size = local.values().map(|x| x.total_bytes()).sum::<u64>();
-        // let missing = db.missing(hash_and_format).await?;
-        // println!("{missing} missing blobs");
-        // let request = GetRequest::new(hash_and_format.hash, missing);
-        // let local_size = db.local_bytes(hash_and_format).await?;
-        println!("local bytes: {}", local_size);
-        let get = db
-            .download()
-            .fetch(connection, hash_and_format, Some(tx.into()));
-        let task = tokio::spawn(show_download_progress(
-            mp.clone(),
-            rx,
-            local_size,
-            total_size,
-        ));
-        let stats = get.await.map_err(show_get_error)?;
-        task.await.ok();
+            // print the details of the collection only in verbose mode
+            if args.common.verbose > 0 {
+                eprintln!(
+                    "getting {} blobs in total, {}",
+                    total_files + 1,
+                    HumanBytes(total_size)
+                );
+            }
+            let (tx, rx) = mpsc::channel(32);
+            // db.dump().await?;
+            let local_size = local.local_bytes();
+            // let missing = db.missing(hash_and_format).await?;
+            // println!("{missing} missing blobs");
+            // let request = GetRequest::new(hash_and_format.hash, missing);
+            // let local_size = db.local_bytes(hash_and_format).await?;
+            println!("local bytes: {}", local_size);
+            // let get = db
+            //     .download()
+            //     .fetch(connection, hash_and_format, Some(tx.into()));
+            let get = db
+                .download()
+                .execute_request(connection, local.missing(), Some(tx.into()));
+            let task = tokio::spawn(show_download_progress(
+                mp.clone(),
+                rx,
+                local_size,
+                total_size,
+            ));
+            let stats = get.await.map_err(show_get_error)?;
+            task.await.ok();
+            let info = db.download().local(hash_and_format).await?;
+            assert!(info.is_complete());
+            (stats, total_files, payload_size)
+        } else {
+            println!("{} already complete", hash_and_format.hash);
+            let total_files = local.children().unwrap() - 1;
+            let payload_bytes = local.sizes().skip(2).map(Option::unwrap).sum::<u64>();
+            (Stats::default(), total_files, payload_bytes)
+        };
         let collection = Collection::load(hash_and_format.hash, db.as_ref()).await?;
         if args.common.verbose > 1 {
             for (name, hash) in collection.iter() {
@@ -920,7 +956,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
         export(&db, collection, &mut mp).await?;
         anyhow::Ok((total_files, payload_size, stats))
     };
-    let (total_files, payload_size, stats) = select!{
+    let (total_files, payload_size, stats) = select! {
         x = fut => x?,
         _ = tokio::signal::ctrl_c() => {
             db2.shutdown().await?;

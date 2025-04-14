@@ -610,6 +610,10 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         );
         std::process::exit(1);
     }
+    if cwd.join(&args.path) == cwd {
+        println!("can not share from the current directory");
+        std::process::exit(1);
+    }
 
     tokio::fs::create_dir_all(&blobs_data_dir).await?;
 

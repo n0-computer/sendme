@@ -98,6 +98,7 @@ pub enum Commands {
     Send(SendArgs),
 
     /// Receive a file or directory.
+    #[clap(visible_alias = "recv")]
     Receive(ReceiveArgs),
 }
 

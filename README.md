@@ -23,7 +23,7 @@ TLS.
 cargo install sendme
 ```
 
-## For Linux/MacOS
+## For Linux/MacOS/Windows (bash)
 ```
 curl -fsSL https://iroh.computer/sendme.sh | sh
 ```

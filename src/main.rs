@@ -14,22 +14,22 @@ use anyhow::Context;
 use blobs2::{
     api::{
         blobs::{
-            ExportMode, ExportPath, ExportProgress, ImportMode, ImportPathOptions, ImportProgress,
+            AddPathOptions, AddProgress, AddProgressItem, ExportMode, ExportOptions,
+            ExportProgress, ExportProgressItem, ImportMode,
         },
-        Store,
+        Store, TempTag,
     },
     format::collection::Collection,
     get::{
         fsm::{AtBlobHeaderNextError, DecodeError},
         request::get_hash_seq_and_sizes,
-        Stats,
+        GetError, Stats,
     },
     net_protocol::Blobs,
     protocol::{GetRequest, RangeSpecSeq},
     provider::{self, Event},
     store::fs::FsStore,
     ticket::BlobTicket,
-    util::temp_tag::{self, TempTag},
     BlobFormat, Hash, HashAndFormat,
 };
 use clap::{
@@ -402,7 +402,7 @@ async fn import(
                 );
                 pb.set_message(format!("copying {name}"));
                 let import = db
-                    .add_path_with_opts(ImportPathOptions {
+                    .add_path_with_opts(AddPathOptions {
                         path,
                         mode: ImportMode::TryReference,
                         format: BlobFormat::Raw,
@@ -413,25 +413,25 @@ async fn import(
                     let item = stream.next().await.context("import stream ended without a tag")?;
                     trace!("importing {name} {item:?}");
                     match item {
-                        ImportProgress::Size(size) => {
+                        AddProgressItem::Size(size) => {
                             item_size = size;
                             pb.set_length(size);
                         }
-                        ImportProgress::CopyProgress(offset) => {
+                        AddProgressItem::CopyProgress(offset) => {
                             pb.set_position(offset);
                         }
-                        ImportProgress::CopyDone => {
+                        AddProgressItem::CopyDone => {
                             pb.set_position(0);
                             pb.set_message(format!("computing outboard {name}"));
                         }
-                        ImportProgress::OutboardProgress(offset ) => {
+                        AddProgressItem::OutboardProgress(offset ) => {
                             pb.set_position(offset);
                         }
-                        ImportProgress::Error(cause ) => {
+                        AddProgressItem::Error(cause ) => {
                             pb.finish_and_clear();
                             anyhow::bail!("error importing {}: {}", name, cause);
                         }
-                        ImportProgress::Done(tt ) => {
+                        AddProgressItem::Done(tt ) => {
                             pb.finish_and_clear();
                             break tt;
                         }
@@ -486,7 +486,7 @@ async fn export(db: &Store, collection: Collection, mp: &mut MultiProgress) -> a
             anyhow::bail!("target {} already exists", target.display());
         }
         let mut stream = db
-            .export_with_opts(ExportPath {
+            .export_with_opts(ExportOptions {
                 hash: *hash,
                 target,
                 mode: ExportMode::TryReference,
@@ -503,16 +503,16 @@ async fn export(db: &Store, collection: Collection, mp: &mut MultiProgress) -> a
         pb.set_message(format!("exporting {}", name));
         while let Some(item) = stream.next().await {
             match item {
-                ExportProgress::Size(size) => {
+                ExportProgressItem::Size(size) => {
                     pb.set_length(size);
                 }
-                ExportProgress::CopyProgress(offset) => {
+                ExportProgressItem::CopyProgress(offset) => {
                     pb.set_position(offset);
                 }
-                ExportProgress::Done => {
+                ExportProgressItem::Done => {
                     pb.finish_and_clear();
                 }
-                ExportProgress::Error(cause) => {
+                ExportProgressItem::Error(cause) => {
                     pb.finish_and_clear();
                     anyhow::bail!("error exporting {}: {}", name, cause);
                 }
@@ -539,7 +539,9 @@ async fn show_provide_progress(
             Event::ClientConnected {
                 connection_id,
                 node_id,
+                permitted,
             } => {
+                permitted.send(true).await.ok();
                 let pb = mp.add(ProgressBar::hidden());
                 pb.set_style(
                     indicatif::ProgressStyle::default_bar()
@@ -643,6 +645,7 @@ async fn show_provide_progress(
                     }
                 }
             }
+            _ => {}
         }
     }
     Ok(())
@@ -725,7 +728,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     // make a ticket
     let mut addr = router.endpoint().node_addr().await?;
     apply_options(&mut addr, args.ticket_type);
-    let ticket = BlobTicket::new(addr, hash, BlobFormat::HashSeq)?;
+    let ticket = BlobTicket::new(addr, hash, BlobFormat::HashSeq);
     let entry_type = if path.is_file() { "file" } else { "directory" };
     println!(
         "imported {} {}, {}, hash {}",
@@ -787,48 +790,21 @@ pub async fn show_download_progress(
     Ok(())
 }
 
-fn show_get_error(e: anyhow::Error) -> anyhow::Error {
-    if let Some(err) = e.downcast_ref::<DecodeError>() {
-        match err {
-            DecodeError::NotFound => {
-                eprintln!("{}", style("send side no longer has a file").yellow())
-            }
-            DecodeError::LeafNotFound(_) | DecodeError::ParentNotFound(_) => eprintln!(
-                "{}",
-                style("send side no longer has part of a file").yellow()
-            ),
-            DecodeError::Io(err) => eprintln!(
-                "{}",
-                style(format!("generic network error: {}", err)).yellow()
-            ),
-            DecodeError::Read(err) => eprintln!(
-                "{}",
-                style(format!("error reading data from quinn: {}", err)).yellow()
-            ),
-            DecodeError::LeafHashMismatch(_) | DecodeError::ParentHashMismatch(_) => {
-                eprintln!("{}", style("send side sent wrong data").red())
-            }
-        };
-    } else if let Some(header_error) = e.downcast_ref::<AtBlobHeaderNextError>() {
-        // TODO(iroh-bytes): get_to_db should have a concrete error type so you don't have to guess
-        match header_error {
-            AtBlobHeaderNextError::Io(err) => eprintln!(
-                "{}",
-                style(format!("generic network error: {}", err)).yellow()
-            ),
-            AtBlobHeaderNextError::Read(err) => eprintln!(
-                "{}",
-                style(format!("error reading data from quinn: {}", err)).yellow()
-            ),
-            AtBlobHeaderNextError::NotFound => {
-                eprintln!("{}", style("send side no longer has a file").yellow())
-            }
-        };
-    } else {
-        eprintln!(
+fn show_get_error(e: GetError) -> GetError {
+    match &e {
+        GetError::NotFound(error) => {
+            eprintln!("{}", style("send side no longer has a file").yellow())
+        }
+        GetError::RemoteReset(error) => todo!(),
+        GetError::NoncompliantNode(error) => {
+            eprintln!("{}", style("non-compliant remote").yellow())
+        }
+        GetError::Io(err) => eprintln!(
             "{}",
-            style(format!("generic error: {:?}", e.root_cause())).red()
-        );
+            style(format!("generic network error: {}", err)).yellow()
+        ),
+        GetError::BadRequest(error) => eprintln!("{}", style("bad request").yellow()),
+        GetError::LocalFailure(error) => eprintln!("{}", style("local failure").yellow()),
     }
     e
 }
@@ -923,7 +899,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
             //     .fetch(connection, hash_and_format, Some(tx.into()));
             let get = db
                 .download()
-                .execute_request(connection, local.missing(), Some(tx.into()));
+                .execute(connection, local.missing(), Some(tx.into()));
             let task = tokio::spawn(show_download_progress(
                 mp.clone(),
                 rx,

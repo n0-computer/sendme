@@ -323,12 +323,15 @@ dependencies = [
  "chrono",
  "data-encoding",
  "derive_more 2.0.1",
+ "futures-buffered",
  "futures-lite",
  "genawaiter",
+ "hashlink",
  "hex",
  "iroh",
  "iroh-base",
  "iroh-io",
+ "iroh-metrics",
  "iroh-quinn",
  "irpc",
  "irpc-derive",
@@ -1324,6 +1327,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hashlink"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7382cf6263419f2d8df38c55d7da83da5c18aef87fc7a7fc1fb1e344edfe14c1"
+dependencies = [
+ "hashbrown 0.15.2",
+]
+
+[[package]]
 name = "heapless"
 version = "0.7.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2058,7 +2070,9 @@ dependencies = [
 
 [[package]]
 name = "irpc"
-version = "0.2.1"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc4319501704f3eb76dd8225dfe4f301f1ebb47d69e732cec87d0dcb0adc394b"
 dependencies = [
  "anyhow",
  "futures-buffered",
@@ -2077,9 +2091,9 @@ dependencies = [
 
 [[package]]
 name = "irpc-derive"
-version = "0.2.0"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e2f589bf643e4432246e30484b5aa8ac13a33d776aa6e5239cd0cea08b4715c"
+checksum = "f996bf8d28e287d3092604fa5f87279653e594832aa3780a766d6305ce3f402b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3203,9 +3217,9 @@ dependencies = [
 
 [[package]]
 name = "range-collections"
-version = "0.4.5"
+version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca9edd21e2db51000ac63eccddabba622f826e631a60be7bade9bd6a76b69537"
+checksum = "861706ea9c4aded7584c5cd1d241cec2ea7f5f50999f236c22b65409a1f1a0d0"
 dependencies = [
  "binary-merge",
  "inplace-vec-builder",

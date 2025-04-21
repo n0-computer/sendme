@@ -15,7 +15,6 @@ rust-version = "1.81"
 
 [dependencies]
 anyhow = "1.0.75"
-async-channel = "2.3.1"
 clap = { version = "4.4.10", features = ["derive"] }
 console = "0.15.7"
 derive_more = { version = "1.0.0", features = [
@@ -24,7 +23,6 @@ derive_more = { version = "1.0.0", features = [
 ] }
 # I had some issues with futures-buffered 0.2.9
 futures-buffered = "0.2.11"
-futures-lite = "2.3.0"
 indicatif = "0.17.7"
 blobs2 = { path = "../blobs2" }
 iroh = "0.34"

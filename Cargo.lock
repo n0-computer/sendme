@@ -301,46 +301,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f68f53c83ab957f72c32642f3868eec03eb974d1fb82e453128456482613d36"
 
 [[package]]
-name = "blobs2"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arrayvec",
- "bao-tree",
- "bytes",
- "chrono",
- "data-encoding",
- "derive_more 2.0.1",
- "futures-buffered",
- "futures-lite",
- "genawaiter",
- "hashlink",
- "hex",
- "iroh",
- "iroh-base",
- "iroh-io",
- "iroh-metrics",
- "iroh-quinn",
- "irpc",
- "irpc-derive",
- "n0-future",
- "nested_enum_utils",
- "postcard",
- "rand 0.8.5",
- "range-collections",
- "redb",
- "ref-cast",
- "reflink-copy",
- "self_cell",
- "serde",
- "smallvec",
- "thiserror 2.0.12",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1878,6 +1838,47 @@ dependencies = [
  "cc",
  "cfg-if",
  "constant_time_eq",
+]
+
+[[package]]
+name = "iroh-blobs"
+version = "0.1.0"
+source = "git+https://github.com/n0-computer/blobs2#7fbf1f00701c28196503f524440a697a8d6fab9c"
+dependencies = [
+ "anyhow",
+ "arrayvec",
+ "bao-tree",
+ "bytes",
+ "chrono",
+ "data-encoding",
+ "derive_more 2.0.1",
+ "futures-buffered",
+ "futures-lite",
+ "genawaiter",
+ "hashlink",
+ "hex",
+ "iroh",
+ "iroh-base",
+ "iroh-io",
+ "iroh-metrics",
+ "iroh-quinn",
+ "irpc",
+ "irpc-derive",
+ "n0-future",
+ "nested_enum_utils",
+ "postcard",
+ "rand 0.8.5",
+ "range-collections",
+ "redb",
+ "ref-cast",
+ "reflink-copy",
+ "self_cell",
+ "serde",
+ "smallvec",
+ "thiserror 2.0.12",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -3649,7 +3650,6 @@ name = "sendme"
 version = "0.24.0"
 dependencies = [
  "anyhow",
- "blobs2",
  "clap",
  "console",
  "data-encoding",
@@ -3658,6 +3658,7 @@ dependencies = [
  "futures-buffered",
  "indicatif",
  "iroh",
+ "iroh-blobs",
  "n0-future",
  "nix 0.29.0",
  "num_cpus",

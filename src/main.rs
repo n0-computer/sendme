@@ -11,7 +11,7 @@ use std::{
 };
 
 use anyhow::Context;
-use blobs2::{
+use iroh_blobs::{
     api::{
         blobs::{
             AddPathOptions, AddProgress, AddProgressItem, ExportMode, ExportOptions,
@@ -658,7 +658,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     }
     // create a magicsocket endpoint
     let mut builder = Endpoint::builder()
-        .alpns(vec![blobs2::protocol::ALPN.to_vec()])
+        .alpns(vec![iroh_blobs::protocol::ALPN.to_vec()])
         .secret_key(secret_key)
         .relay_mode(args.common.relay.into());
     if args.ticket_type == AddrInfoOptions::Id {
@@ -708,7 +708,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         let blobs = Blobs::new(&store, endpoint.clone(), Some(progress_tx));
 
         let router = iroh::protocol::Router::builder(endpoint)
-            .accept(blobs2::ALPN, blobs.clone())
+            .accept(iroh_blobs::ALPN, blobs.clone())
             .spawn()
             .await?;
 
@@ -830,7 +830,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     let endpoint = builder.bind().await?;
     let dir_name = format!(".sendme-get-{}", ticket.hash().to_hex());
     let iroh_data_dir = std::env::current_dir()?.join(dir_name);
-    let db = blobs2::store::fs::FsStore::load(&iroh_data_dir).await?;
+    let db = iroh_blobs::store::fs::FsStore::load(&iroh_data_dir).await?;
     let db2 = db.clone();
     trace!("load done!");
     let fut = async move {
@@ -852,7 +852,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
             connect_progress.set_draw_target(ProgressDrawTarget::stderr());
             connect_progress.set_style(ProgressStyle::default_spinner());
             connect_progress.set_message(format!("connecting to {}", addr.node_id));
-            let connection = endpoint.connect(addr, blobs2::protocol::ALPN).await?;
+            let connection = endpoint.connect(addr, iroh_blobs::protocol::ALPN).await?;
             connect_progress.finish_and_clear();
             // // trace!("request to complete sizes: {:#?}", local.complete_sizes());
             // db.download().execute_request(connection.clone(), local.complete_sizes(), None).await?;

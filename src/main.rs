@@ -1,37 +1,15 @@
 //! Command line arguments.
 
 use std::{
-    collections::{btree_map::Range, BTreeMap},
+    collections::BTreeMap,
     fmt::{Display, Formatter},
     net::{SocketAddrV4, SocketAddrV6},
     path::{Component, Path, PathBuf},
     str::FromStr,
-    sync::Arc,
     time::Duration,
 };
 
 use anyhow::Context;
-use iroh_blobs::{
-    api::{
-        blobs::{
-            AddPathOptions, AddProgress, AddProgressItem, ExportMode, ExportOptions,
-            ExportProgress, ExportProgressItem, ImportMode,
-        },
-        Store, TempTag,
-    },
-    format::collection::Collection,
-    get::{
-        fsm::{AtBlobHeaderNextError, DecodeError},
-        request::get_hash_seq_and_sizes,
-        GetError, Stats,
-    },
-    net_protocol::Blobs,
-    protocol::{GetRequest, RangeSpecSeq},
-    provider::{self, Event},
-    store::fs::FsStore,
-    ticket::BlobTicket,
-    BlobFormat, Hash, HashAndFormat,
-};
 use clap::{
     error::{ContextKind, ErrorKind},
     CommandFactory, Parser, Subcommand,
@@ -46,7 +24,23 @@ use iroh::{
     discovery::{dns::DnsDiscovery, pkarr::PkarrPublisher},
     Endpoint, NodeAddr, RelayMap, RelayMode, RelayUrl, SecretKey,
 };
-use n0_future::{pin, stream, task::AbortOnDropHandle, StreamExt};
+use iroh_blobs::{
+    api::{
+        blobs::{
+            AddPathOptions, AddProgressItem, ExportMode, ExportOptions, ExportProgressItem,
+            ImportMode,
+        },
+        Store, TempTag,
+    },
+    format::collection::Collection,
+    get::{request::get_hash_seq_and_sizes, GetError, Stats},
+    net_protocol::Blobs,
+    provider::{self, Event},
+    store::fs::FsStore,
+    ticket::BlobTicket,
+    BlobFormat, Hash,
+};
+use n0_future::{task::AbortOnDropHandle, StreamExt};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tokio::{select, sync::mpsc};
@@ -456,7 +450,7 @@ async fn import(
         .into_iter()
         .map(|(name, tag, _)| ((name, *tag.hash()), tag))
         .unzip::<_, _, Collection, Vec<_>>();
-    let temp_tag = collection.clone().store(&db).await?;
+    let temp_tag = collection.clone().store(db).await?;
     // now that the collection is stored, we can drop the tags
     // data is protected by the collection
     drop(tags);
@@ -624,7 +618,7 @@ async fn show_provide_progress(
             Event::TransferCompleted {
                 connection_id,
                 request_id,
-                stats,
+                ..
             } => {
                 if let Some(msg) = connections.get_mut(&connection_id) {
                     if let Some(pb) = msg.requests.remove(&request_id) {
@@ -636,7 +630,7 @@ async fn show_provide_progress(
             Event::TransferAborted {
                 connection_id,
                 request_id,
-                stats,
+                ..
             } => {
                 if let Some(msg) = connections.get_mut(&connection_id) {
                     if let Some(pb) = msg.requests.remove(&request_id) {
@@ -792,19 +786,19 @@ pub async fn show_download_progress(
 
 fn show_get_error(e: GetError) -> GetError {
     match &e {
-        GetError::NotFound(error) => {
+        GetError::NotFound(_) => {
             eprintln!("{}", style("send side no longer has a file").yellow())
         }
-        GetError::RemoteReset(error) => todo!(),
-        GetError::NoncompliantNode(error) => {
+        GetError::RemoteReset(_) => eprintln!("{}", style("remote reset").yellow()),
+        GetError::NoncompliantNode(_) => {
             eprintln!("{}", style("non-compliant remote").yellow())
         }
         GetError::Io(err) => eprintln!(
             "{}",
             style(format!("generic network error: {}", err)).yellow()
         ),
-        GetError::BadRequest(error) => eprintln!("{}", style("bad request").yellow()),
-        GetError::LocalFailure(error) => eprintln!("{}", style("local failure").yellow()),
+        GetError::BadRequest(_) => eprintln!("{}", style("bad request").yellow()),
+        GetError::LocalFailure(_) => eprintln!("{}", style("local failure").yellow()),
     }
     e
 }
@@ -868,8 +862,8 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
                 get_hash_seq_and_sizes(&connection, &hash_and_format.hash, 1024 * 1024 * 32, None)
                     .await
                     .map_err(show_get_error)?;
-            let total_size = sizes.iter().map(|x| *x).sum::<u64>();
-            let payload_size = sizes.iter().skip(2).map(|x| *x).sum::<u64>();
+            let total_size = sizes.iter().copied().sum::<u64>();
+            let payload_size = sizes.iter().skip(2).copied().sum::<u64>();
             let total_files = (sizes.len().saturating_sub(1)) as u64;
             eprintln!("got sizes");
             eprintln!(

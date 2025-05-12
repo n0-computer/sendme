@@ -14,7 +14,7 @@ use indicatif::{
 };
 use iroh::{
     discovery::{dns::DnsDiscovery, pkarr::PkarrPublisher},
-    Endpoint, NodeAddr, RelayMap, RelayMode, RelayUrl, SecretKey,
+    Endpoint, NodeAddr, RelayMode, RelayUrl, SecretKey,
 };
 use iroh_blobs::{
     format::collection::Collection,
@@ -169,7 +169,7 @@ impl From<RelayModeOption> for RelayMode {
         match value {
             RelayModeOption::Disabled => RelayMode::Disabled,
             RelayModeOption::Default => RelayMode::Default,
-            RelayModeOption::Custom(url) => RelayMode::Custom(RelayMap::from_url(url)),
+            RelayModeOption::Custom(url) => RelayMode::Custom(url.into()),
         }
     }
 }
@@ -622,8 +622,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
 
     let router = iroh::protocol::Router::builder(endpoint)
         .accept(iroh_blobs::ALPN, blobs.clone())
-        .spawn()
-        .await?;
+        .spawn();
 
     let path = args.path;
     let (temp_tag, size, collection) = import(path.clone(), blobs.store().clone()).await?;

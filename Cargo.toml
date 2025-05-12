@@ -25,9 +25,9 @@ derive_more = { version = "1.0.0", features = [
 futures-buffered = "0.2.4"
 futures-lite = "2.3.0"
 indicatif = "0.17.7"
-iroh-blobs = { version = "0.34", features = ["net_protocol"] }
+iroh-blobs = { version = "0.35", features = ["net_protocol"] }
 iroh-io = "0.6"
-iroh = "0.34"
+iroh = "0.35"
 num_cpus = "1.16.0"
 rand = "0.8.5"
 serde = { version = "1", features = ["derive"] }

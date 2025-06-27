@@ -10,11 +10,12 @@ use std::{
 };
 
 use anyhow::Context;
+use arboard::Clipboard;
 use clap::{
     error::{ContextKind, ErrorKind},
     CommandFactory, Parser, Subcommand,
 };
-use console::style;
+use console::{style, Key, Term};
 use data_encoding::HEXLOWER;
 use futures_buffered::BufferedStreamExt;
 use indicatif::{
@@ -22,7 +23,7 @@ use indicatif::{
 };
 use iroh::{
     discovery::{dns::DnsDiscovery, pkarr::PkarrPublisher},
-    Endpoint, NodeAddr, RelayMap, RelayMode, RelayUrl, SecretKey,
+    Endpoint, NodeAddr, RelayMode, RelayUrl, SecretKey, Watcher,
 };
 use iroh_blobs::{
     api::{
@@ -134,7 +135,7 @@ pub struct CommonArgs {
 
     /// The relay URL to use as a home relay,
     ///
-    /// Can be set to "disable" to disable relay servers and "default"
+    /// Can be set to "disabled" to disable relay servers and "default"
     /// to configure default servers.
     #[clap(long, default_value_t = RelayModeOption::Default)]
     pub relay: RelayModeOption,
@@ -181,7 +182,7 @@ impl From<RelayModeOption> for RelayMode {
         match value {
             RelayModeOption::Disabled => RelayMode::Disabled,
             RelayModeOption::Default => RelayMode::Default,
-            RelayModeOption::Custom(url) => RelayMode::Custom(RelayMap::from_url(url)),
+            RelayModeOption::Custom(url) => RelayMode::Custom(url.into()),
         }
     }
 }
@@ -212,6 +213,10 @@ pub struct SendArgs {
 
     #[clap(flatten)]
     pub common: CommonArgs,
+
+    /// Store the receive command in the clipboard.
+    #[clap(short = 'c', long)]
+    pub clipboard: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -277,6 +282,7 @@ fn get_or_create_secret(print: bool) -> anyhow::Result<SecretKey> {
         Err(_) => {
             let key = SecretKey::generate(rand::rngs::OsRng);
             if print {
+                let key = hex::encode(key.to_bytes());
                 eprintln!("using secret key {}", key);
             }
             Ok(key)
@@ -401,7 +407,7 @@ async fn import(
                         mode: ImportMode::TryReference,
                         format: BlobFormat::Raw,
                     });
-                let mut stream = import.stream().await?;
+                let mut stream = import.stream().await;
                 let mut item_size = 0;
                 let temp_tag = loop {
                     let item = stream.next().await.context("import stream ended without a tag")?;
@@ -648,6 +654,7 @@ async fn show_provide_progress(
 async fn send(args: SendArgs) -> anyhow::Result<()> {
     let secret_key = get_or_create_secret(args.common.verbose > 0)?;
     if args.common.show_secret {
+        let secret_key = hex::encode(secret_key.to_bytes());
         eprintln!("using secret key {}", secret_key);
     }
     // create a magicsocket endpoint
@@ -657,7 +664,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         .relay_mode(args.common.relay.into());
     if args.ticket_type == AddrInfoOptions::Id {
         builder =
-            builder.add_discovery(|secret_key| Some(PkarrPublisher::n0_dns(secret_key.clone())));
+            builder.add_discovery(PkarrPublisher::n0_dns());
     }
     if let Some(addr) = args.common.magic_ipv4_addr {
         builder = builder.bind_addr_v4(addr);
@@ -703,8 +710,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
 
         let router = iroh::protocol::Router::builder(endpoint)
             .accept(iroh_blobs::ALPN, blobs.clone())
-            .spawn()
-            .await?;
+            .spawn();
 
         let import_result = import(path2, blobs.store(), &mut mp).await?;
         // wait for the endpoint to figure out its address before making a ticket
@@ -720,7 +726,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     let hash = *temp_tag.hash();
 
     // make a ticket
-    let mut addr = router.endpoint().node_addr().await?;
+    let mut addr = router.endpoint().node_addr().initialized().await?;
     apply_options(&mut addr, args.ticket_type);
     let ticket = BlobTicket::new(addr, hash, BlobFormat::HashSeq);
     let entry_type = if path.is_file() { "file" } else { "directory" };
@@ -736,13 +742,28 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
             println!("    {} {name}", print_hash(hash, args.common.format));
         }
     }
+
     println!("to get this data, use");
     println!("sendme receive {}", ticket);
 
-    drop(temp_tag);
+    // Add command to the clipboard
+    if args.clipboard {
+        add_to_clipboard(&ticket);
+    }
 
-    // Wait for exit
+    let _keyboard = tokio::task::spawn(async move {
+        let term = Term::stdout();
+        println!("press c to copy command to clipboard, or use the --clipboard argument");
+        loop {
+            if let Ok(Key::Char('c')) = term.read_key() {
+                add_to_clipboard(&ticket);
+            }
+        }
+    });
+
     tokio::signal::ctrl_c().await?;
+
+    drop(temp_tag);
 
     println!("shutting down");
     tokio::time::timeout(Duration::from_secs(2), router.shutdown()).await??;
@@ -753,6 +774,20 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     progress.await.ok();
 
     Ok(())
+}
+
+fn add_to_clipboard(ticket: &BlobTicket) {
+    let clipboard = Clipboard::new();
+    match clipboard {
+        Ok(mut clip) => {
+            if let Err(e) = clip.set_text(format!("sendme receive {}", ticket)) {
+                eprintln!("Could not add to clipboard: {}", e);
+            } else {
+                println!("Command added to clipboard.")
+            }
+        }
+        Err(e) => eprintln!("Could not access clipboard: {}", e),
+    }
 }
 
 fn make_download_progress() -> ProgressBar {
@@ -786,19 +821,19 @@ pub async fn show_download_progress(
 
 fn show_get_error(e: GetError) -> GetError {
     match &e {
-        GetError::NotFound(_) => {
+        GetError::NotFound { .. } => {
             eprintln!("{}", style("send side no longer has a file").yellow())
         }
-        GetError::RemoteReset(_) => eprintln!("{}", style("remote reset").yellow()),
-        GetError::NoncompliantNode(_) => {
+        GetError::RemoteReset  { .. } => eprintln!("{}", style("remote reset").yellow()),
+        GetError::NoncompliantNode  { .. } => {
             eprintln!("{}", style("non-compliant remote").yellow())
         }
-        GetError::Io(err) => eprintln!(
+        GetError::Io  { source, .. } => eprintln!(
             "{}",
-            style(format!("generic network error: {}", err)).yellow()
+            style(format!("generic network error: {}", source)).yellow()
         ),
-        GetError::BadRequest(_) => eprintln!("{}", style("bad request").yellow()),
-        GetError::LocalFailure(_) => eprintln!("{}", style("local failure").yellow()),
+        GetError::BadRequest  { .. } => eprintln!("{}", style("bad request").yellow()),
+        GetError::LocalFailure  { .. } => eprintln!("{}", style("local failure").yellow()),
     }
     e
 }
@@ -813,7 +848,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
         .relay_mode(args.common.relay.into());
 
     if ticket.node_addr().relay_url.is_none() && ticket.node_addr().direct_addresses.is_empty() {
-        builder = builder.add_discovery(|_| Some(DnsDiscovery::n0_dns()));
+        builder = builder.add_discovery(DnsDiscovery::n0_dns());
     }
     if let Some(addr) = args.common.magic_ipv4_addr {
         builder = builder.bind_addr_v4(addr);
@@ -838,7 +873,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
         mp.set_draw_target(draw_target);
         let hash_and_format = ticket.hash_and_format();
         trace!("computing local");
-        let local = db.download().local(hash_and_format).await?;
+        let local = db.remote().local(hash_and_format).await?;
         trace!("local done");
         let (stats, total_files, payload_size) = if !local.is_complete() {
             trace!("{} not complete", hash_and_format.hash);
@@ -892,8 +927,9 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
             //     .download()
             //     .fetch(connection, hash_and_format, Some(tx.into()));
             let get = db
-                .download()
-                .execute(connection, local.missing(), Some(tx.into()));
+                .remote()
+                .execute_get(connection, local.missing());
+            // todo: forward to download progress
             let task = tokio::spawn(show_download_progress(
                 mp.clone(),
                 rx,
@@ -902,13 +938,13 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
             ));
             let stats = get.await.map_err(show_get_error)?;
             task.await.ok();
-            let info = db.download().local(hash_and_format).await?;
+            let info = db.remote().local(hash_and_format).await?;
             assert!(info.is_complete());
             (stats, total_files, payload_size)
         } else {
             println!("{} already complete", hash_and_format.hash);
             let total_files = local.children().unwrap() - 1;
-            let payload_bytes = local.sizes().skip(2).map(Option::unwrap).sum::<u64>();
+            let payload_bytes = 0; // todo local.sizes().skip(2).map(Option::unwrap).sum::<u64>();
             (Stats::default(), total_files, payload_bytes)
         };
         let collection = Collection::load(hash_and_format.hash, db.as_ref()).await?;

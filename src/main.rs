@@ -31,6 +31,7 @@ use iroh_blobs::{
             AddPathOptions, AddProgressItem, ExportMode, ExportOptions, ExportProgressItem,
             ImportMode,
         },
+        remote::GetProgressItem,
         Store, TempTag,
     },
     format::collection::Collection,
@@ -378,39 +379,29 @@ async fn import(
         .filter_map(Result::transpose)
         .collect::<anyhow::Result<Vec<_>>>()?;
     // import all the files, using num_cpus workers, return names and temp tags
-    let op = mp.add(ProgressBar::hidden());
-    op.set_style(
-        ProgressStyle::with_template(
-            "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos}/{len}",
-        )?
-        .progress_chars("#>-"),
-    );
+    let op = mp.add(make_import_overall_progress());
     op.set_message(format!("importing {} files", data_sources.len()));
     op.set_length(data_sources.len() as u64);
-    let mut names_and_tags =  n0_future::stream::iter(data_sources)
+    let mut names_and_tags = n0_future::stream::iter(data_sources)
         .map(|(name, path)| {
             let db = db.clone();
-            let pb = mp.add(ProgressBar::hidden());
+            let pb = mp.add(make_import_item_progress());
             let op = op.clone();
             async move {
                 op.inc(1);
-                pb.set_style(
-                    ProgressStyle::with_template(
-                        "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}",
-                    )?
-                    .progress_chars("#>-"),
-                );
                 pb.set_message(format!("copying {name}"));
-                let import = db
-                    .add_path_with_opts(AddPathOptions {
-                        path,
-                        mode: ImportMode::TryReference,
-                        format: BlobFormat::Raw,
-                    });
+                let import = db.add_path_with_opts(AddPathOptions {
+                    path,
+                    mode: ImportMode::TryReference,
+                    format: BlobFormat::Raw,
+                });
                 let mut stream = import.stream().await;
                 let mut item_size = 0;
                 let temp_tag = loop {
-                    let item = stream.next().await.context("import stream ended without a tag")?;
+                    let item = stream
+                        .next()
+                        .await
+                        .context("import stream ended without a tag")?;
                     trace!("importing {name} {item:?}");
                     match item {
                         AddProgressItem::Size(size) => {
@@ -424,14 +415,14 @@ async fn import(
                             pb.set_position(0);
                             pb.set_message(format!("computing outboard {name}"));
                         }
-                        AddProgressItem::OutboardProgress(offset ) => {
+                        AddProgressItem::OutboardProgress(offset) => {
                             pb.set_position(offset);
                         }
-                        AddProgressItem::Error(cause ) => {
+                        AddProgressItem::Error(cause) => {
                             pb.finish_and_clear();
                             anyhow::bail!("error importing {}: {}", name, cause);
                         }
-                        AddProgressItem::Done(tt ) => {
+                        AddProgressItem::Done(tt) => {
                             pb.finish_and_clear();
                             break tt;
                         }
@@ -475,7 +466,10 @@ fn get_export_path(root: &Path, name: &str) -> anyhow::Result<PathBuf> {
 
 async fn export(db: &Store, collection: Collection, mp: &mut MultiProgress) -> anyhow::Result<()> {
     let root = std::env::current_dir()?;
-    for (name, hash) in collection.iter() {
+    let op = mp.add(make_export_overall_progress());
+    op.set_length(collection.len() as u64);
+    for (i, (name, hash)) in collection.iter().enumerate() {
+        op.set_position(i as u64);
         let target = get_export_path(&root, name)?;
         if target.exists() {
             eprintln!(
@@ -493,13 +487,7 @@ async fn export(db: &Store, collection: Collection, mp: &mut MultiProgress) -> a
             })
             .stream()
             .await;
-        let pb = mp.add(ProgressBar::hidden());
-        pb.set_style(
-            ProgressStyle::with_template(
-                "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}",
-            )?
-            .progress_chars("#>-"),
-        );
+        let pb = mp.add(make_export_item_progress());
         pb.set_message(format!("exporting {}", name));
         while let Some(item) = stream.next().await {
             match item {
@@ -519,6 +507,7 @@ async fn export(db: &Store, collection: Collection, mp: &mut MultiProgress) -> a
             }
         }
     }
+    op.finish_and_clear();
     Ok(())
 }
 
@@ -663,8 +652,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         .secret_key(secret_key)
         .relay_mode(args.common.relay.into());
     if args.ticket_type == AddrInfoOptions::Id {
-        builder =
-            builder.add_discovery(PkarrPublisher::n0_dns());
+        builder = builder.add_discovery(PkarrPublisher::n0_dns());
     }
     if let Some(addr) = args.common.magic_ipv4_addr {
         builder = builder.bind_addr_v4(addr);
@@ -708,11 +696,11 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         let store = FsStore::load(&blobs_data_dir2).await?;
         let blobs = Blobs::new(&store, endpoint.clone(), Some(progress_tx));
 
+        let import_result = import(path2, blobs.store(), &mut mp).await?;
+
         let router = iroh::protocol::Router::builder(endpoint)
             .accept(iroh_blobs::ALPN, blobs.clone())
             .spawn();
-
-        let import_result = import(path2, blobs.store(), &mut mp).await?;
         // wait for the endpoint to figure out its address before making a ticket
         let _ = router.endpoint().home_relay().initialized().await?;
         anyhow::Ok((router, import_result))
@@ -790,12 +778,88 @@ fn add_to_clipboard(ticket: &BlobTicket) {
     }
 }
 
+const DOWNLOAD_PROGRESS: &str = "{prefix}{spinner:.green}{msg} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} {binary_bytes_per_sec}";
+const EXPORT_OVERALL_PROGRESS: &str =
+    "{prefix}{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {human_pos}/{human_len} {per_sec}";
+const IMPORT_OVERALL_PROGRESS: &str =
+    "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos}/{len}";
+const IMPORT_ITEM_PROGRESS: &str =
+    "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}";
+const TICK_MS: u64 = 250;
+
+fn make_import_overall_progress() -> ProgressBar {
+    let pb = ProgressBar::hidden();
+    pb.enable_steady_tick(std::time::Duration::from_millis(TICK_MS));
+    pb.set_style(
+        ProgressStyle::with_template(IMPORT_OVERALL_PROGRESS)
+            .unwrap()
+            .progress_chars("#>-"),
+    );
+    pb
+}
+
+fn make_import_item_progress() -> ProgressBar {
+    let pb = ProgressBar::hidden();
+    pb.enable_steady_tick(std::time::Duration::from_millis(TICK_MS));
+    pb.set_style(
+        ProgressStyle::with_template(IMPORT_ITEM_PROGRESS)
+            .unwrap()
+            .progress_chars("#>-"),
+    );
+    pb
+}
+
+fn make_connect_progress() -> ProgressBar {
+    let pb = ProgressBar::hidden();
+    pb.set_style(        ProgressStyle::with_template("{prefix}{spinner:.green} Connecting ... [{elapsed_precise}]")
+            .unwrap()
+    );
+    pb.set_prefix(format!("{} ", style("[1/4]").bold().dim()));
+    pb.enable_steady_tick(Duration::from_millis(TICK_MS));
+    pb
+}
+
+fn make_get_sizes_progress() -> ProgressBar {
+    let pb = ProgressBar::hidden();
+    pb.set_style(        ProgressStyle::with_template("{prefix}{spinner:.green} Getting sizes... [{elapsed_precise}]")
+            .unwrap()
+    );
+    pb.set_prefix(format!("{} ", style("[2/4]").bold().dim()));
+    pb.enable_steady_tick(Duration::from_millis(TICK_MS));
+    pb
+}
+
 fn make_download_progress() -> ProgressBar {
+    let pb = ProgressBar::hidden();
+    pb.enable_steady_tick(std::time::Duration::from_millis(TICK_MS));
+    pb.set_style(
+        ProgressStyle::with_template(DOWNLOAD_PROGRESS)
+            .unwrap()
+            .progress_chars("#>-"),
+    );
+    pb.set_prefix(format!("{} ", style("[3/4]").bold().dim()));
+    pb.set_message(format!("Downloading ..."));
+    pb
+}
+
+fn make_export_overall_progress() -> ProgressBar {
+    let pb = ProgressBar::hidden();
+    pb.enable_steady_tick(std::time::Duration::from_millis(TICK_MS));
+    pb.set_style(
+        ProgressStyle::with_template(EXPORT_OVERALL_PROGRESS)
+            .unwrap()
+            .progress_chars("#>-"),
+    );
+    pb.set_prefix(format!("{}", style("[4/4]").bold().dim()));
+    pb
+}
+
+fn make_export_item_progress() -> ProgressBar {
     let pb = ProgressBar::hidden();
     pb.enable_steady_tick(std::time::Duration::from_millis(100));
     pb.set_style(
         ProgressStyle::with_template(
-            "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} {binary_bytes_per_sec}",
+            "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}",
         )
         .unwrap()
         .progress_chars("#>-"),
@@ -810,7 +874,6 @@ pub async fn show_download_progress(
     total_size: u64,
 ) -> anyhow::Result<()> {
     let op = mp.add(make_download_progress());
-    op.set_message(format!("{} Connecting ...\n", style("[1/3]").bold().dim()));
     op.set_length(total_size);
     while let Some(offset) = recv.recv().await {
         op.set_position(local_size + offset);
@@ -824,16 +887,18 @@ fn show_get_error(e: GetError) -> GetError {
         GetError::NotFound { .. } => {
             eprintln!("{}", style("send side no longer has a file").yellow())
         }
-        GetError::RemoteReset  { .. } => eprintln!("{}", style("remote reset").yellow()),
-        GetError::NoncompliantNode  { .. } => {
+        GetError::RemoteReset { .. } => eprintln!("{}", style("remote reset").yellow()),
+        GetError::NoncompliantNode { .. } => {
             eprintln!("{}", style("non-compliant remote").yellow())
         }
-        GetError::Io  { source, .. } => eprintln!(
+        GetError::Io { source, .. } => eprintln!(
             "{}",
             style(format!("generic network error: {}", source)).yellow()
         ),
-        GetError::BadRequest  { .. } => eprintln!("{}", style("bad request").yellow()),
-        GetError::LocalFailure  { .. } => eprintln!("{}", style("local failure").yellow()),
+        GetError::BadRequest { .. } => eprintln!("{}", style("bad request").yellow()),
+        GetError::LocalFailure { source, .. } => {
+            eprintln!("{} {source:?}", style("local failure").yellow())
+        }
     }
     e
 }
@@ -877,30 +942,18 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
         trace!("local done");
         let (stats, total_files, payload_size) = if !local.is_complete() {
             trace!("{} not complete", hash_and_format.hash);
-            let connect_progress = mp.add(ProgressBar::hidden());
-            connect_progress.set_draw_target(ProgressDrawTarget::stderr());
-            connect_progress.set_style(ProgressStyle::default_spinner());
-            connect_progress.set_message(format!("connecting to {}", addr.node_id));
+            let cp = mp.add(make_connect_progress());
             let connection = endpoint.connect(addr, iroh_blobs::protocol::ALPN).await?;
-            connect_progress.finish_and_clear();
-            // // trace!("request to complete sizes: {:#?}", local.complete_sizes());
-            // db.download().execute_request(connection.clone(), local.complete_sizes(), None).await?;
-            // db.dump().await?;
-            // let local = db.download().local(hash_and_format).await?;
-            // // println!("{:#?}", local);
-            // trace!("{}", local.sizes().all(|x| x.is_some()));
-            // let meta_size = local.sizes().take(2).map(Option::unwrap).sum::<u64>();
-            // let total_files = local.children().unwrap() - 1;
-            // let payload_size = local.sizes().skip(2).map(Option::unwrap).sum::<u64>();
-            // let total_size = meta_size + payload_size;
+            cp.finish_and_clear();
+            let sp = mp.add(make_get_sizes_progress());
             let (_hash_seq, sizes) =
                 get_hash_seq_and_sizes(&connection, &hash_and_format.hash, 1024 * 1024 * 32, None)
                     .await
                     .map_err(show_get_error)?;
+            sp.finish_and_clear();
             let total_size = sizes.iter().copied().sum::<u64>();
             let payload_size = sizes.iter().skip(2).copied().sum::<u64>();
             let total_files = (sizes.len().saturating_sub(1)) as u64;
-            eprintln!("got sizes");
             eprintln!(
                 "getting collection {} {} files, {}",
                 print_hash(&ticket.hash(), args.common.format),
@@ -916,30 +969,34 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
                 );
             }
             let (tx, rx) = mpsc::channel(32);
-            // db.dump().await?;
             let local_size = local.local_bytes();
-            // let missing = db.missing(hash_and_format).await?;
-            // println!("{missing} missing blobs");
-            // let request = GetRequest::new(hash_and_format.hash, missing);
-            // let local_size = db.local_bytes(hash_and_format).await?;
-            println!("local bytes: {}", local_size);
-            // let get = db
-            //     .download()
-            //     .fetch(connection, hash_and_format, Some(tx.into()));
-            let get = db
-                .remote()
-                .execute_get(connection, local.missing());
-            // todo: forward to download progress
+            let get = db.remote().execute_get(connection, local.missing());
             let task = tokio::spawn(show_download_progress(
                 mp.clone(),
                 rx,
                 local_size,
                 total_size,
             ));
-            let stats = get.await.map_err(show_get_error)?;
+            // let mut stream = get.stream();
+            let mut stats = Stats::default();
+            let mut stream = get.stream();
+            while let Some(item) = stream.next().await {
+                trace!("got item {item:?}");
+                match item {
+                    GetProgressItem::Progress(offset) => {
+                        tx.send(offset).await.ok();
+                    }
+                    GetProgressItem::Done(value) => {
+                        stats = value;
+                        break;
+                    }
+                    GetProgressItem::Error(cause) => {
+                        anyhow::bail!(show_get_error(cause));
+                    }
+                }
+            }
+            drop(tx);
             task.await.ok();
-            let info = db.remote().local(hash_and_format).await?;
-            assert!(info.is_complete());
             (stats, total_files, payload_size)
         } else {
             println!("{} already complete", hash_and_format.hash);
@@ -955,13 +1012,13 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
         }
         if let Some((name, _)) = collection.iter().next() {
             if let Some(first) = name.split('/').next() {
-                println!("downloading to {}", first);
+                println!("exporting to {}", first);
             }
         }
-        println!("exporting");
         export(&db, collection, &mut mp).await?;
         anyhow::Ok((total_files, payload_size, stats))
     };
+    // let (total_files, payload_size, stats) = fut.await?;
     let (total_files, payload_size, stats) = select! {
         x = fut => x?,
         _ = tokio::signal::ctrl_c() => {

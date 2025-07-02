@@ -1950,7 +1950,8 @@ dependencies = [
 [[package]]
 name = "iroh-blobs"
 version = "0.90.0"
-source = "git+https://github.com/n0-computer/iroh-blobs#fbbf990e7dc21c2899446650508c8efd9f101dc3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5b6e39e8a3e9dded2eb0083fe5decf8a17000f22ba9b0b500ae1f476ce877b4"
 dependencies = [
  "anyhow",
  "arrayvec",

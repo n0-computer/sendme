@@ -6,7 +6,7 @@ use std::{
     net::{SocketAddrV4, SocketAddrV6},
     path::{Component, Path, PathBuf},
     str::FromStr,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::Context;
@@ -385,10 +385,11 @@ async fn import(
     let mut names_and_tags = n0_future::stream::iter(data_sources)
         .map(|(name, path)| {
             let db = db.clone();
-            let pb = mp.add(make_import_item_progress());
             let op = op.clone();
+            let mp = mp.clone();
             async move {
                 op.inc(1);
+                let pb = mp.add(make_import_item_progress());
                 pb.set_message(format!("copying {name}"));
                 let import = db.add_path_with_opts(AddPathOptions {
                     path,
@@ -412,8 +413,8 @@ async fn import(
                             pb.set_position(offset);
                         }
                         AddProgressItem::CopyDone => {
-                            pb.set_position(0);
                             pb.set_message(format!("computing outboard {name}"));
+                            pb.set_position(0);
                         }
                         AddProgressItem::OutboardProgress(offset) => {
                             pb.set_position(offset);
@@ -431,7 +432,6 @@ async fn import(
                 anyhow::Ok((name, temp_tag, item_size))
             }
         })
-        // .then(|x| x)
         .buffered_unordered(parallelism)
         .collect::<Vec<_>>()
         .await
@@ -684,6 +684,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         progress_rx,
     )));
     let setup = async move {
+        let t0 = Instant::now();
         tokio::fs::create_dir_all(&blobs_data_dir2).await?;
 
         let endpoint = builder.bind().await?;
@@ -697,15 +698,16 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         let blobs = Blobs::new(&store, endpoint.clone(), Some(progress_tx));
 
         let import_result = import(path2, blobs.store(), &mut mp).await?;
+        let dt = t0.elapsed();
 
         let router = iroh::protocol::Router::builder(endpoint)
             .accept(iroh_blobs::ALPN, blobs.clone())
             .spawn();
         // wait for the endpoint to figure out its address before making a ticket
         let _ = router.endpoint().home_relay().initialized().await?;
-        anyhow::Ok((router, import_result))
+        anyhow::Ok((router, import_result, dt))
     };
-    let (router, (temp_tag, size, collection)) = select! {
+    let (router, (temp_tag, size, collection), dt) = select! {
         x = setup => x?,
         _ = tokio::signal::ctrl_c() => {
             std::process::exit(130);
@@ -723,12 +725,13 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         entry_type,
         path.display(),
         HumanBytes(size),
-        print_hash(&hash, args.common.format)
+        print_hash(&hash, args.common.format),
     );
     if args.common.verbose > 1 {
         for (name, hash) in collection.iter() {
             println!("    {} {name}", print_hash(hash, args.common.format));
         }
+        println!("{}s, {}/s", dt.as_secs_f64(), HumanBytes(((size as f64) / dt.as_secs_f64()).floor() as u64));
     }
 
     println!("to get this data, use");
@@ -784,7 +787,7 @@ const EXPORT_OVERALL_PROGRESS: &str =
 const IMPORT_OVERALL_PROGRESS: &str =
     "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos}/{len}";
 const IMPORT_ITEM_PROGRESS: &str =
-    "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}";
+    "{msg}{spinner:.green} XXXX [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}";
 const TICK_MS: u64 = 250;
 
 fn make_import_overall_progress() -> ProgressBar {
@@ -811,8 +814,9 @@ fn make_import_item_progress() -> ProgressBar {
 
 fn make_connect_progress() -> ProgressBar {
     let pb = ProgressBar::hidden();
-    pb.set_style(        ProgressStyle::with_template("{prefix}{spinner:.green} Connecting ... [{elapsed_precise}]")
-            .unwrap()
+    pb.set_style(
+        ProgressStyle::with_template("{prefix}{spinner:.green} Connecting ... [{elapsed_precise}]")
+            .unwrap(),
     );
     pb.set_prefix(format!("{} ", style("[1/4]").bold().dim()));
     pb.enable_steady_tick(Duration::from_millis(TICK_MS));
@@ -821,8 +825,11 @@ fn make_connect_progress() -> ProgressBar {
 
 fn make_get_sizes_progress() -> ProgressBar {
     let pb = ProgressBar::hidden();
-    pb.set_style(        ProgressStyle::with_template("{prefix}{spinner:.green} Getting sizes... [{elapsed_precise}]")
-            .unwrap()
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{prefix}{spinner:.green} Getting sizes... [{elapsed_precise}]",
+        )
+        .unwrap(),
     );
     pb.set_prefix(format!("{} ", style("[2/4]").bold().dim()));
     pb.enable_steady_tick(Duration::from_millis(TICK_MS));
@@ -922,7 +929,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
         builder = builder.bind_addr_v6(addr);
     }
     let endpoint = builder.bind().await?;
-    let dir_name = format!(".sendme-get-{}", ticket.hash().to_hex());
+    let dir_name = format!(".sendme-recv-{}", ticket.hash().to_hex());
     let iroh_data_dir = std::env::current_dir()?.join(dir_name);
     let db = iroh_blobs::store::fs::FsStore::load(&iroh_data_dir).await?;
     let db2 = db.clone();
@@ -1018,9 +1025,16 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
         export(&db, collection, &mut mp).await?;
         anyhow::Ok((total_files, payload_size, stats))
     };
-    // let (total_files, payload_size, stats) = fut.await?;
     let (total_files, payload_size, stats) = select! {
-        x = fut => x?,
+        x = fut => match x {
+            Ok(x) => x,
+            Err(e) => {
+                // make sure we shutdown the db before exiting
+                db2.shutdown().await?;
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        },
         _ = tokio::signal::ctrl_c() => {
             db2.shutdown().await?;
             std::process::exit(130);

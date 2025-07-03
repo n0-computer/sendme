@@ -284,7 +284,7 @@ fn get_or_create_secret(print: bool) -> anyhow::Result<SecretKey> {
             let key = SecretKey::generate(rand::rngs::OsRng);
             if print {
                 let key = hex::encode(key.to_bytes());
-                eprintln!("using secret key {}", key);
+                eprintln!("using secret key {key}");
             }
             Ok(key)
         }
@@ -488,7 +488,7 @@ async fn export(db: &Store, collection: Collection, mp: &mut MultiProgress) -> a
             .stream()
             .await;
         let pb = mp.add(make_export_item_progress());
-        pb.set_message(format!("exporting {}", name));
+        pb.set_message(format!("exporting {name}"));
         while let Some(item) = stream.next().await {
             match item {
                 ExportProgressItem::Size(size) => {
@@ -537,7 +537,7 @@ async fn show_provide_progress(
                         .template("{msg}") // Only display the message
                         .unwrap(),
                 );
-                pb.set_message(format!("{} {}", node_id, connection_id));
+                pb.set_message(format!("{node_id} {connection_id}"));
                 connections.insert(
                     connection_id,
                     PerConnectionProgress {
@@ -569,7 +569,7 @@ async fn show_provide_progress(
                     )?
                     .progress_chars("#>-"),
                 );
-                pb.set_message(format!("{} {}", request_id, hash));
+                pb.set_message(format!("{request_id} {hash}"));
                 let Some(connection) = connections.get_mut(&connection_id) else {
                     error!("got request for unknown connection {connection_id}");
                     continue;
@@ -644,7 +644,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     let secret_key = get_or_create_secret(args.common.verbose > 0)?;
     if args.common.show_secret {
         let secret_key = hex::encode(secret_key.to_bytes());
-        eprintln!("using secret key {}", secret_key);
+        eprintln!("using secret key {secret_key}");
     }
     // create a magicsocket endpoint
     let mut builder = Endpoint::builder()
@@ -739,7 +739,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     }
 
     println!("to get this data, use");
-    println!("sendme receive {}", ticket);
+    println!("sendme receive {ticket}");
 
     // Add command to the clipboard
     if args.clipboard {
@@ -775,13 +775,13 @@ fn add_to_clipboard(ticket: &BlobTicket) {
     let clipboard = Clipboard::new();
     match clipboard {
         Ok(mut clip) => {
-            if let Err(e) = clip.set_text(format!("sendme receive {}", ticket)) {
-                eprintln!("Could not add to clipboard: {}", e);
+            if let Err(e) = clip.set_text(format!("sendme receive {ticket}")) {
+                eprintln!("Could not add to clipboard: {e}");
             } else {
                 println!("Command added to clipboard.")
             }
         }
-        Err(e) => eprintln!("Could not access clipboard: {}", e),
+        Err(e) => eprintln!("Could not access clipboard: {e}"),
     }
 }
 
@@ -844,7 +844,7 @@ fn make_download_progress() -> ProgressBar {
             .progress_chars("#>-"),
     );
     pb.set_prefix(format!("{} ", style("[3/4]").bold().dim()));
-    pb.set_message(format!("Downloading ..."));
+    pb.set_message("Downloading ...".to_string());
     pb
 }
 
@@ -899,7 +899,7 @@ fn show_get_error(e: GetError) -> GetError {
         }
         GetError::Io { source, .. } => eprintln!(
             "{}",
-            style(format!("generic network error: {}", source)).yellow()
+            style(format!("generic network error: {source}")).yellow()
         ),
         GetError::BadRequest { .. } => eprintln!("{}", style("bad request").yellow()),
         GetError::LocalFailure { source, .. } => {
@@ -1018,7 +1018,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
         }
         if let Some((name, _)) = collection.iter().next() {
             if let Some(first) = name.split('/').next() {
-                println!("exporting to {}", first);
+                println!("exporting to {first}");
             }
         }
         export(&db, collection, &mut mp).await?;

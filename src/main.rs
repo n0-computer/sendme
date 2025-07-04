@@ -10,8 +10,6 @@ use std::{
 };
 
 use anyhow::Context;
-#[cfg(feature = "clipboard")]
-use arboard::Clipboard;
 use clap::{
     error::{ContextKind, ErrorKind},
     CommandFactory, Parser, Subcommand,
@@ -780,17 +778,12 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
 
 #[cfg(feature = "clipboard")]
 fn add_to_clipboard(ticket: &BlobTicket) {
-    let clipboard = Clipboard::new();
-    match clipboard {
-        Ok(mut clip) => {
-            if let Err(e) = clip.set_text(format!("sendme receive {ticket}")) {
-                eprintln!("Could not add to clipboard: {e}");
-            } else {
-                println!("Command added to clipboard.")
-            }
-        }
-        Err(e) => eprintln!("Could not access clipboard: {e}"),
-    }
+    use base64::prelude::{Engine, BASE64_STANDARD};
+
+    print!(
+        "\x1B]52;c;{}\x07",
+        BASE64_STANDARD.encode(format!("sendme receive {ticket}"))
+    );
 }
 
 const TICK_MS: u64 = 250;

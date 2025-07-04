@@ -82,9 +82,9 @@ fn send_recv_file() {
 fn send_recv_dir() {
     fn create_file(base: &Path, i: usize, j: usize, k: usize) -> (PathBuf, Vec<u8>) {
         let name = base
-            .join(format!("dir-{}", i))
-            .join(format!("subdir-{}", j))
-            .join(format!("file-{}", k));
+            .join(format!("dir-{i}"))
+            .join(format!("subdir-{j}"))
+            .join(format!("file-{k}"));
         let len = i * 100 + j * 10 + k;
         let data = vec![0u8; len];
         (name, data)

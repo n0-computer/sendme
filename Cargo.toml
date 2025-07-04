@@ -15,19 +15,17 @@ rust-version = "1.81"
 
 [dependencies]
 anyhow = "1.0.75"
-async-channel = "2.3.1"
 clap = { version = "4.4.10", features = ["derive"] }
 console = "0.15.7"
 derive_more = { version = "1.0.0", features = [
     "display",
     "from_str"
 ] }
-futures-buffered = "0.2.4"
-futures-lite = "2.3.0"
+# I had some issues with futures-buffered 0.2.9
+futures-buffered = "0.2.11"
 indicatif = "0.17.7"
-iroh-blobs = { version = "0.35", features = ["net_protocol"] }
-iroh-io = "0.6"
-iroh = "0.35"
+iroh-blobs = { version = "0.90" }
+iroh = "0.90"
 num_cpus = "1.16.0"
 rand = "0.8.5"
 serde = { version = "1", features = ["derive"] }
@@ -38,6 +36,7 @@ walkdir = "2.4.0"
 data-encoding = "2.6.0"
 n0-future = "0.1.2"
 arboard = "3.4.1"
+hex = "0.4.3"
 
 [dev-dependencies]
 duct = "0.13.6"

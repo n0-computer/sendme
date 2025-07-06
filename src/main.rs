@@ -778,12 +778,19 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
 
 #[cfg(feature = "clipboard")]
 fn add_to_clipboard(ticket: &BlobTicket) {
+    use std::io::{stdout, Write};
+
     use base64::prelude::{Engine, BASE64_STANDARD};
 
+    // Use OSC 52 to copy content to clipboard.
     print!(
         "\x1B]52;c;{}\x07",
         BASE64_STANDARD.encode(format!("sendme receive {ticket}"))
     );
+
+    stdout()
+        .flush()
+        .unwrap_or_else(|e| eprintln!("Failed to flush stdout: {e}"));
 }
 
 const TICK_MS: u64 = 250;

@@ -10,12 +10,11 @@ use std::{
 };
 
 use anyhow::Context;
-use arboard::Clipboard;
 use clap::{
     error::{ContextKind, ErrorKind},
     CommandFactory, Parser, Subcommand,
 };
-use console::{style, Key, Term};
+use console::style;
 use data_encoding::HEXLOWER;
 use futures_buffered::BufferedStreamExt;
 use indicatif::{
@@ -216,6 +215,7 @@ pub struct SendArgs {
     pub common: CommonArgs,
 
     /// Store the receive command in the clipboard.
+    #[cfg(feature = "clipboard")]
     #[clap(short = 'c', long)]
     pub clipboard: bool,
 }
@@ -741,20 +741,25 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     println!("to get this data, use");
     println!("sendme receive {ticket}");
 
-    // Add command to the clipboard
-    if args.clipboard {
-        add_to_clipboard(&ticket);
-    }
+    #[cfg(feature = "clipboard")]
+    {
+        use console::{Key, Term};
 
-    let _keyboard = tokio::task::spawn(async move {
-        let term = Term::stdout();
-        println!("press c to copy command to clipboard, or use the --clipboard argument");
-        loop {
-            if let Ok(Key::Char('c')) = term.read_key() {
-                add_to_clipboard(&ticket);
-            }
+        // Add command to the clipboard
+        if args.clipboard {
+            add_to_clipboard(&ticket);
         }
-    });
+
+        let _keyboard = tokio::task::spawn(async move {
+            let term = Term::stdout();
+            println!("press c to copy command to clipboard, or use the --clipboard argument");
+            loop {
+                if let Ok(Key::Char('c')) = term.read_key() {
+                    add_to_clipboard(&ticket);
+                }
+            }
+        });
+    }
 
     tokio::signal::ctrl_c().await?;
 
@@ -771,18 +776,21 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "clipboard")]
 fn add_to_clipboard(ticket: &BlobTicket) {
-    let clipboard = Clipboard::new();
-    match clipboard {
-        Ok(mut clip) => {
-            if let Err(e) = clip.set_text(format!("sendme receive {ticket}")) {
-                eprintln!("Could not add to clipboard: {e}");
-            } else {
-                println!("Command added to clipboard.")
-            }
-        }
-        Err(e) => eprintln!("Could not access clipboard: {e}"),
-    }
+    use std::io::{stdout, Write};
+
+    use base64::prelude::{Engine, BASE64_STANDARD};
+
+    // Use OSC 52 to copy content to clipboard.
+    print!(
+        "\x1B]52;c;{}\x07",
+        BASE64_STANDARD.encode(format!("sendme receive {ticket}"))
+    );
+
+    stdout()
+        .flush()
+        .unwrap_or_else(|e| eprintln!("Failed to flush stdout: {e}"));
 }
 
 const TICK_MS: u64 = 250;

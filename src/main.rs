@@ -12,6 +12,8 @@ use std::{
 use anyhow::Context;
 #[cfg(feature = "zstd")]
 use async_compression::tokio::bufread::{ZstdDecoder, ZstdEncoder};
+#[cfg(feature = "zstd")]
+use async_compression::Level;
 use clap::{
     error::{ContextKind, ErrorKind},
     CommandFactory, Parser, Subcommand,
@@ -158,11 +160,16 @@ pub struct CommonArgs {
 
     /// Use zstd to compress outgoing and decompress incoming data
     #[cfg(feature = "zstd")]
-    #[clap(short = 'Z', long)]
+    #[clap(short = 'z', long)]
     pub zstd: bool,
 
+    /// Compression level for zstd
+    #[cfg(feature = "zstd")]
+    #[clap(short = 'q', long, default_value_t = 3, requires("zstd"))]
+    pub compression_quality: u8,
+
     #[cfg(not(feature = "zstd"))]
-    #[clap(short = 'Z', long, hide = true)]
+    #[clap(short = 'z', long, hide = true)]
     pub zstd: bool,
 }
 
@@ -378,6 +385,7 @@ async fn import(
     db: &Store,
     mp: &mut MultiProgress,
     _do_compress: bool,
+    _compression_level: u8,
 ) -> anyhow::Result<(TempTag, u64, Collection)> {
     let parallelism = num_cpus::get();
     let path = path.canonicalize()?;
@@ -418,10 +426,13 @@ async fn import(
 
                 #[cfg(feature = "zstd")]
                 if _do_compress {
-                    pb.set_message(format!("compressing {name}"));
                     let file_stream = File::open(&path).await?;
+                    pb.set_message(format!("Compressing {name}"));
+                    pb.set_length(file_stream.metadata().await?.len());
                     let reader = BufReader::new(file_stream);
-                    let encoder = ZstdEncoder::new(reader);
+                    let encoder =
+                        ZstdEncoder::with_quality(reader, Level::Precise(_compression_level as _));
+
                     let compressed_stream = ReaderStream::new(encoder);
                     import = db.add_stream(compressed_stream).await;
                 } else {
@@ -842,7 +853,20 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         let store = FsStore::load(&blobs_data_dir2).await?;
         let blobs = Blobs::new(&store, endpoint.clone(), Some(progress_tx));
 
-        let import_result = import(path2, blobs.store(), &mut mp, do_compress).await?;
+        #[cfg(feature = "zstd")]
+        let compression_quality = args.common.compression_quality.clamp(1, 22);
+
+        #[cfg(not(feature = "zstd"))]
+        let compression_level = 0;
+
+        let import_result = import(
+            path2,
+            blobs.store(),
+            &mut mp,
+            do_compress,
+            compression_quality,
+        )
+        .await?;
         let dt = t0.elapsed();
 
         let router = iroh::protocol::Router::builder(endpoint)
@@ -886,7 +910,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     println!("to get this data, use");
     println!(
         "sendme receive{} {}",
-        if do_compress { " -Z" } else { "" },
+        if do_compress { " -z" } else { "" },
         ticket
     );
 
@@ -936,7 +960,7 @@ fn add_to_clipboard(ticket: &BlobTicket, add_decompress_tag: bool) {
         "\x1B]52;c;{}\x07",
         BASE64_STANDARD.encode(format!(
             "sendme receive{} {ticket}",
-            if add_decompress_tag { " -Z" } else { "" }
+            if add_decompress_tag { " -z" } else { "" }
         ))
     );
 

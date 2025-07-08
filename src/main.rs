@@ -896,7 +896,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
 
         // Add command to the clipboard
         if args.clipboard {
-            add_to_clipboard(&ticket);
+            add_to_clipboard(&ticket, do_compress);
         }
 
         let _keyboard = tokio::task::spawn(async move {
@@ -904,7 +904,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
             println!("press c to copy command to clipboard, or use the --clipboard argument");
             loop {
                 if let Ok(Key::Char('c')) = term.read_key() {
-                    add_to_clipboard(&ticket);
+                    add_to_clipboard(&ticket, do_compress);
                 }
             }
         });
@@ -926,7 +926,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
 }
 
 #[cfg(feature = "clipboard")]
-fn add_to_clipboard(ticket: &BlobTicket) {
+fn add_to_clipboard(ticket: &BlobTicket, add_decompress_tag: bool) {
     use std::io::{stdout, Write};
 
     use base64::prelude::{Engine, BASE64_STANDARD};
@@ -934,7 +934,10 @@ fn add_to_clipboard(ticket: &BlobTicket) {
     // Use OSC 52 to copy content to clipboard.
     print!(
         "\x1B]52;c;{}\x07",
-        BASE64_STANDARD.encode(format!("sendme receive {ticket}"))
+        BASE64_STANDARD.encode(format!(
+            "sendme receive{} {ticket}",
+            if add_decompress_tag { " -Z" } else { "" }
+        ))
     );
 
     stdout()

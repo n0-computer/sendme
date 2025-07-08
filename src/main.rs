@@ -10,6 +10,7 @@ use std::{
 };
 
 use anyhow::Context;
+use async_compression::tokio::bufread::{ZstdDecoder, ZstdEncoder};
 use clap::{
     error::{ContextKind, ErrorKind},
     CommandFactory, Parser, Subcommand,
@@ -24,11 +25,12 @@ use iroh::{
     discovery::{dns::DnsDiscovery, pkarr::PkarrPublisher},
     Endpoint, NodeAddr, RelayMode, RelayUrl, SecretKey, Watcher,
 };
+use iroh_blobs::protocol::ChunkRanges;
 use iroh_blobs::{
     api::{
         blobs::{
-            AddPathOptions, AddProgressItem, ExportMode, ExportOptions, ExportProgressItem,
-            ImportMode,
+            AddPathOptions, AddProgress, AddProgressItem, ExportMode, ExportOptions,
+            ExportProgressItem, ImportMode,
         },
         remote::GetProgressItem,
         Store, TempTag,
@@ -41,10 +43,15 @@ use iroh_blobs::{
     ticket::BlobTicket,
     BlobFormat, Hash,
 };
+use iroh_blobs::api::blobs::EncodedItem;
 use n0_future::{task::AbortOnDropHandle, StreamExt};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use tokio::{select, sync::mpsc};
+use tokio::fs::File;
+use tokio::io::{BufReader, BufWriter};
+use tokio::{io, select, sync::mpsc};
+use tokio_util::io::ReaderStream;
+use tokio_util::io::StreamReader;
 use tracing::{error, trace};
 use walkdir::WalkDir;
 
@@ -142,6 +149,11 @@ pub struct CommonArgs {
 
     #[clap(long)]
     pub show_secret: bool,
+
+    /// Compress the stream before sending it
+    #[cfg(feature = "zstd")]
+    #[clap(short = 'Z', long)]
+    pub zstd: bool,
 }
 
 /// Available command line options for configuring relays.
@@ -355,6 +367,7 @@ async fn import(
     path: PathBuf,
     db: &Store,
     mp: &mut MultiProgress,
+    do_compress: bool,
 ) -> anyhow::Result<(TempTag, u64, Collection)> {
     let parallelism = num_cpus::get();
     let path = path.canonicalize()?;
@@ -391,11 +404,22 @@ async fn import(
                 op.inc(1);
                 let pb = mp.add(make_import_item_progress());
                 pb.set_message(format!("copying {name}"));
-                let import = db.add_path_with_opts(AddPathOptions {
-                    path,
-                    mode: ImportMode::TryReference,
-                    format: BlobFormat::Raw,
-                });
+                let import: AddProgress;
+                if do_compress {
+                    pb.set_message(format!("compressing {name}"));
+                    let file_stream = File::open(&path).await?;
+                    let reader = BufReader::new(file_stream);
+                    let encoder = ZstdEncoder::new(reader);
+                    let compressed_stream = ReaderStream::new(encoder);
+                    import = db.add_stream(compressed_stream).await;
+                } else {
+                    import = db.add_path_with_opts(AddPathOptions {
+                        path,
+                        mode: ImportMode::TryReference,
+                        format: BlobFormat::Raw,
+                    });
+                }
+
                 let mut stream = import.stream().await;
                 let mut item_size = 0;
                 let temp_tag = loop {
@@ -464,7 +488,12 @@ fn get_export_path(root: &Path, name: &str) -> anyhow::Result<PathBuf> {
     Ok(path)
 }
 
-async fn export(db: &Store, collection: Collection, mp: &mut MultiProgress) -> anyhow::Result<()> {
+async fn export(
+    db: &Store,
+    collection: Collection,
+    mp: &mut MultiProgress,
+    decompress: bool,
+) -> anyhow::Result<()> {
     let root = std::env::current_dir()?;
     let op = mp.add(make_export_overall_progress());
     op.set_length(collection.len() as u64);
@@ -479,30 +508,79 @@ async fn export(db: &Store, collection: Collection, mp: &mut MultiProgress) -> a
             eprintln!("You can remove the file or directory and try again. The download will not be repeated.");
             anyhow::bail!("target {} already exists", target.display());
         }
-        let mut stream = db
-            .export_with_opts(ExportOptions {
-                hash: *hash,
-                target,
-                mode: ExportMode::TryReference,
-            })
-            .stream()
-            .await;
-        let pb = mp.add(make_export_item_progress());
-        pb.set_message(format!("exporting {name}"));
-        while let Some(item) = stream.next().await {
-            match item {
-                ExportProgressItem::Size(size) => {
-                    pb.set_length(size);
-                }
-                ExportProgressItem::CopyProgress(offset) => {
-                    pb.set_position(offset);
-                }
-                ExportProgressItem::Done => {
-                    pb.finish_and_clear();
-                }
-                ExportProgressItem::Error(cause) => {
-                    pb.finish_and_clear();
-                    anyhow::bail!("error exporting {}: {}", name, cause);
+
+        if decompress {
+
+            // let bao_stream = db
+            //     .export_bao(*hash, ChunkRanges::all())
+            //     .into_byte_stream()
+            //     .map(|res| res.map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string())));
+
+            let mut i = 0;
+
+            let bao_stream = db.export_bao(*hash, ChunkRanges::all()).stream()
+                .for_each(|res| {
+                    i += 1;
+                    match res {
+                        EncodedItem::Size(size) => {
+                            println!("Size {size}",)
+                        }
+                        EncodedItem::Parent(_) => {
+
+                        }
+                        EncodedItem::Leaf(leaf) => {
+                            if i%10 == 0{
+                                println!("Leaf {}",leaf.offset)
+                            }
+                        }
+                        EncodedItem::Error(cause) => {
+                            println!("Error {cause}")
+                        }
+                        EncodedItem::Done => {
+                        }
+                    }
+                }).await;
+
+            let bao_stream = db.export_bao(*hash, ChunkRanges::all()).stream()
+                .filter_map(|res| {
+
+                })
+
+
+            // let mut stream_reader = StreamReader::new(bao_stream);
+            // let mut decoder = ZstdDecoder::new(stream_reader);
+            // let target_file = File::create(&target).await?;
+            // let mut output_writer = BufWriter::new(target_file);
+            //
+            // tokio::io::copy(&mut stream_reader, &mut output_writer).await?;
+
+        } else {
+            let mut stream = db
+                .export_with_opts(ExportOptions {
+                    hash: *hash,
+                    target,
+                    mode: ExportMode::TryReference,
+                })
+                .stream()
+                .await;
+
+            let pb = mp.add(make_export_item_progress());
+            pb.set_message(format!("exporting {name}"));
+            while let Some(item) = stream.next().await {
+                match item {
+                    ExportProgressItem::Size(size) => {
+                        pb.set_length(size);
+                    }
+                    ExportProgressItem::CopyProgress(offset) => {
+                        pb.set_position(offset);
+                    }
+                    ExportProgressItem::Done => {
+                        pb.finish_and_clear();
+                    }
+                    ExportProgressItem::Error(cause) => {
+                        pb.finish_and_clear();
+                        anyhow::bail!("error exporting {}: {}", name, cause);
+                    }
                 }
             }
         }
@@ -697,7 +775,13 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         let store = FsStore::load(&blobs_data_dir2).await?;
         let blobs = Blobs::new(&store, endpoint.clone(), Some(progress_tx));
 
-        let import_result = import(path2, blobs.store(), &mut mp).await?;
+        #[cfg(feature = "zstd")]
+        let do_compress = args.common.zstd;
+
+        #[cfg(not(feature = "zstd"))]
+        let do_compress = false;
+
+        let import_result = import(path2, blobs.store(), &mut mp, do_compress).await?;
         let dt = t0.elapsed();
 
         let router = iroh::protocol::Router::builder(endpoint)
@@ -1029,7 +1113,14 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
                 println!("exporting to {first}");
             }
         }
-        export(&db, collection, &mut mp).await?;
+
+        #[cfg(feature = "zstd")]
+        let do_decompress = args.common.zstd;
+
+        #[cfg(not(feature = "zstd"))]
+        let do_decompress = false;
+
+        export(&db, collection, &mut mp, do_decompress).await?;
         anyhow::Ok((total_files, payload_size, stats))
     };
     let (total_files, payload_size, stats) = select! {

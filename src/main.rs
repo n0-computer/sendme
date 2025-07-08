@@ -854,7 +854,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         let compression_quality = args.common.compression_quality.clamp(1, 22);
 
         #[cfg(not(feature = "zstd"))]
-        let compression_level = 0;
+        let compression_quality = 0;
 
         let import_result = import(
             path2,
@@ -1204,7 +1204,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
             if let Some(first) = name.split('/').next() {
                 println!(
                     "exporting to {first}{}",
-                    if do_decompress != args.common.zstd {
+                    if do_decompress != args.common.zstd && collection.len() == 1 {
                         ".zst"
                     } else {
                         ""

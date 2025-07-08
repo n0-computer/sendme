@@ -619,10 +619,7 @@ async fn export(
                 })
                 .filter_map(|res| match res {
                     EncodedItem::Leaf(leaf) => Some(Ok(leaf.data)),
-                    EncodedItem::Error(err) => Some(Err(tokio::io::Error::new(
-                        tokio::io::ErrorKind::Other,
-                        err.to_string(),
-                    ))),
+                    EncodedItem::Error(err) => Some(Err(tokio::io::Error::other(err.to_string()))),
                     _ => None,
                 });
 

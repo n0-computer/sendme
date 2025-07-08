@@ -510,50 +510,34 @@ async fn export(
         }
 
         if decompress {
-
-            // let bao_stream = db
-            //     .export_bao(*hash, ChunkRanges::all())
-            //     .into_byte_stream()
-            //     .map(|res| res.map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string())));
-
-            let mut i = 0;
-
-            let bao_stream = db.export_bao(*hash, ChunkRanges::all()).stream()
-                .for_each(|res| {
-                    i += 1;
-                    match res {
-                        EncodedItem::Size(size) => {
-                            println!("Size {size}",)
-                        }
-                        EncodedItem::Parent(_) => {
-
-                        }
-                        EncodedItem::Leaf(leaf) => {
-                            if i%10 == 0{
-                                println!("Leaf {}",leaf.offset)
-                            }
-                        }
-                        EncodedItem::Error(cause) => {
-                            println!("Error {cause}")
-                        }
-                        EncodedItem::Done => {
-                        }
+            let pb = mp.add(make_export_item_progress());
+            pb.set_message(format!("Decompressing {name}"));
+            let byte_stream = db.export_bao(*hash, ChunkRanges::all()).stream()
+                .inspect(|res| match res {
+                    EncodedItem::Size(size) => {
+                        pb.set_length(*size);
                     }
-                }).await;
-
-            let bao_stream = db.export_bao(*hash, ChunkRanges::all()).stream()
-                .filter_map(|res| {
-
+                    EncodedItem::Leaf(leaf) => {
+                        pb.set_position(leaf.offset);
+                    }
+                    EncodedItem::Done => {
+                        pb.finish_and_clear();
+                    }
+                    _ => {}
                 })
+                .filter_map(|res| {
+                    match res {
+                        EncodedItem::Leaf(leaf) => Some(Ok(leaf.data)),
+                        EncodedItem::Error(err) => Some(Err(io::Error::new(io::ErrorKind::Other, err.to_string()))),
+                        _ => None,
+                    }
+                });
 
-
-            // let mut stream_reader = StreamReader::new(bao_stream);
-            // let mut decoder = ZstdDecoder::new(stream_reader);
-            // let target_file = File::create(&target).await?;
-            // let mut output_writer = BufWriter::new(target_file);
-            //
-            // tokio::io::copy(&mut stream_reader, &mut output_writer).await?;
-
+            let reader = StreamReader::new(byte_stream);
+            let mut decoder = ZstdDecoder::new(reader);
+            let target_file = File::create(&target).await?;
+            let mut output_writer = BufWriter::new(target_file);
+            io::copy(&mut decoder, &mut output_writer).await?;
         } else {
             let mut stream = db
                 .export_with_opts(ExportOptions {

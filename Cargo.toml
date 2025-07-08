@@ -48,3 +48,7 @@ tempfile = "3.8.1"
 [features]
 clipboard = ["dep:base64"]
 default = ["clipboard"]
+
+[patch.crates-io]
+iroh = { git = "https://github.com/n0-computer/iroh.git", branch = "main" }
+iroh-blobs = { git = "https://github.com/n0-computer/iroh-blobs.git", branch = "main" }

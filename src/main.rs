@@ -15,6 +15,7 @@ use clap::{
     CommandFactory, Parser, Subcommand,
 };
 use console::style;
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use data_encoding::HEXLOWER;
 use futures_buffered::BufferedStreamExt;
 use indicatif::{
@@ -743,7 +744,14 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
 
     #[cfg(feature = "clipboard")]
     {
-        use console::{Key, Term};
+        use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+        #[cfg(unix)]
+        use nix::{
+            sys::signal::{kill, Signal},
+            unistd::Pid,
+        };
+        #[cfg(windows)]
+        use windows_sys::Win32::System::Console::{GenerateConsoleCtrlEvent, CTRL_C_EVENT};
 
         // Add command to the clipboard
         if args.clipboard {
@@ -751,13 +759,45 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         }
 
         let _keyboard = tokio::task::spawn(async move {
-            let term = Term::stdout();
             println!("press c to copy command to clipboard, or use the --clipboard argument");
-            loop {
-                if let Ok(Key::Char('c')) = term.read_key() {
-                    add_to_clipboard(&ticket);
-                }
-            }
+
+            // `enable_raw_mode` will remember the current terminal mode
+            // and restore it when `disable_raw_mode` is called.
+            enable_raw_mode().unwrap_or_else(|err| eprintln!("Failed to enable raw mode: {err}"));
+            let event_stream = EventStream::new();
+            event_stream
+                .for_each(move |e| match e {
+                    Err(err) => eprintln!("Failed to process event: {err}"),
+                    // c is pressed
+                    Ok(Event::Key(KeyEvent {
+                        code: KeyCode::Char('c'),
+                        modifiers: KeyModifiers::NONE,
+                        kind: KeyEventKind::Press,
+                        ..
+                    })) => add_to_clipboard(&ticket),
+                    // Ctrl+c is pressed
+                    Ok(Event::Key(KeyEvent {
+                        code: KeyCode::Char('c'),
+                        modifiers: KeyModifiers::CONTROL,
+                        kind: KeyEventKind::Press,
+                        ..
+                    })) => {
+                        disable_raw_mode()
+                            .unwrap_or_else(|e| eprintln!("Failed to disable raw mode: {e}"));
+
+                        #[cfg(unix)]
+                        kill(Pid::from_raw(0), Some(Signal::SIGINT))
+                            .unwrap_or_else(|e| eprintln!("Failed to end process: {e}"));
+
+                        #[cfg(windows)]
+                        // Safety: Raw syscall to re-send the Ctrl+C event to the console
+                        if unsafe { GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0) } == 0 {
+                            eprintln!("Failed to end process: {}", std::io::Error::last_os_error());
+                        }
+                    }
+                    _ => {}
+                })
+                .await
         });
     }
 
@@ -778,19 +818,15 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
 
 #[cfg(feature = "clipboard")]
 fn add_to_clipboard(ticket: &BlobTicket) {
-    use std::io::{stdout, Write};
+    use std::io::stdout;
 
-    use base64::prelude::{Engine, BASE64_STANDARD};
+    use crossterm::{clipboard::CopyToClipboard, execute};
 
-    // Use OSC 52 to copy content to clipboard.
-    print!(
-        "\x1B]52;c;{}\x07",
-        BASE64_STANDARD.encode(format!("sendme receive {ticket}"))
-    );
-
-    stdout()
-        .flush()
-        .unwrap_or_else(|e| eprintln!("Failed to flush stdout: {e}"));
+    execute!(
+        stdout(),
+        CopyToClipboard::to_clipboard_from(format!("sendme receive {ticket}"))
+    )
+    .unwrap_or_else(|e| eprintln!("Failed to copy to clipboard: {e}"));
 }
 
 const TICK_MS: u64 = 250;

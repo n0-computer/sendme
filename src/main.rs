@@ -790,7 +790,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
                             .unwrap_or_else(|e| eprintln!("Failed to end process: {e}"));
 
                         #[cfg(windows)]
-                        if unsafe { GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0) } != 0 {
+                        if unsafe { GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0) } == 0 {
                             eprintln!("Failed to end process: {}", std::io::Error::last_os_error());
                         }
                     }

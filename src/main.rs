@@ -745,10 +745,13 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     #[cfg(feature = "clipboard")]
     {
         use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+        #[cfg(unix)]
         use nix::{
             sys::signal::{kill, Signal},
             unistd::Pid,
         };
+        #[cfg(windows)]
+        use windows::Win32::System::Console::{GenerateConsoleCtrlEvent, CTRL_C_EVENT};
 
         // Add command to the clipboard
         if args.clipboard {
@@ -764,7 +767,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
             let event_stream = EventStream::new();
             event_stream
                 .for_each(move |e| match e {
-                    Err(err) => eprintln!("Failed to process event: {err}\r"),
+                    Err(err) => eprintln!("Failed to process event: {err}"),
                     // c is pressed
                     Ok(Event::Key(KeyEvent {
                         code: KeyCode::Char('c'),
@@ -780,8 +783,13 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
                         ..
                     })) => {
                         disable_raw_mode()
-                            .unwrap_or_else(|e| eprintln!("Failed to disable raw mode: {e}\r"));
+                            .unwrap_or_else(|e| eprintln!("Failed to disable raw mode: {e}"));
+                        #[cfg(unix)]
                         kill(Pid::from_raw(0), Some(Signal::SIGINT))
+                            .unwrap_or_else(|e| eprintln!("Failed to end process: {e}"));
+
+                        #[cfg(windows)]
+                        unsafe { GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0) }
                             .unwrap_or_else(|e| eprintln!("Failed to end process: {e}"));
                     }
                     _ => {}

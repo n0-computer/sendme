@@ -764,7 +764,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
             let event_stream = EventStream::new();
             event_stream
                 .for_each(move |e| match e {
-                    Err(err) => eprintln!("Failed to process event: {err}"),
+                    Err(err) => eprintln!("Failed to process event: {err}\r"),
                     // c is pressed
                     Ok(Event::Key(KeyEvent {
                         code: KeyCode::Char('c'),
@@ -780,7 +780,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
                         ..
                     })) => {
                         disable_raw_mode()
-                            .unwrap_or_else(|e| eprintln!("Failed to disable raw mode: {e}"));
+                            .unwrap_or_else(|e| eprintln!("Failed to disable raw mode: {e}\r"));
                         kill(Pid::from_raw(0), Some(Signal::SIGINT))
                             .unwrap_or_else(|e| eprintln!("Failed to end process: {e}"));
                     }

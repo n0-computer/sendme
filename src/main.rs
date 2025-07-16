@@ -745,11 +745,13 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     #[cfg(feature = "clipboard")]
     {
         use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+        #[cfg(any(unix, windows))]
+        use std::io;
+
         #[cfg(unix)]
-        use nix::{
-            sys::signal::{kill, Signal},
-            unistd::Pid,
-        };
+        use libc::{raise, SIGINT};
+
         #[cfg(windows)]
         use windows_sys::Win32::System::Console::{GenerateConsoleCtrlEvent, CTRL_C_EVENT};
 
@@ -786,13 +788,20 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
                             .unwrap_or_else(|e| eprintln!("Failed to disable raw mode: {e}"));
 
                         #[cfg(unix)]
-                        kill(Pid::from_raw(0), Some(Signal::SIGINT))
-                            .unwrap_or_else(|e| eprintln!("Failed to end process: {e}"));
+                        // Safety: Raw syscall to re-send the SIGINT signal to the console.
+                        // `raise` returns nonzero for failure.
+                        if unsafe { raise(SIGINT) } != 0 {
+                            eprintln!("Failed to raise signal: {}", io::Error::last_os_error());
+                        }
 
                         #[cfg(windows)]
-                        // Safety: Raw syscall to re-send the Ctrl+C event to the console
+                        // Safety: Raw syscall to re-send the Ctrl+C event to the console.
+                        // `GenerateConsoleCtrlEvent` returns 0 for failure.
                         if unsafe { GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0) } == 0 {
-                            eprintln!("Failed to end process: {}", std::io::Error::last_os_error());
+                            eprintln!(
+                                "Failed to generate console event: {}",
+                                io::Error::last_os_error()
+                            );
                         }
                     }
                     _ => {}

@@ -15,7 +15,6 @@ use clap::{
     CommandFactory, Parser, Subcommand,
 };
 use console::style;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use data_encoding::HEXLOWER;
 use futures_buffered::BufferedStreamExt;
 use indicatif::{
@@ -743,72 +742,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     println!("sendme receive {ticket}");
 
     #[cfg(feature = "clipboard")]
-    {
-        use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-
-        #[cfg(any(unix, windows))]
-        use std::io;
-
-        #[cfg(unix)]
-        use libc::{raise, SIGINT};
-
-        #[cfg(windows)]
-        use windows_sys::Win32::System::Console::{GenerateConsoleCtrlEvent, CTRL_C_EVENT};
-
-        // Add command to the clipboard
-        if args.clipboard {
-            add_to_clipboard(&ticket);
-        }
-
-        let _keyboard = tokio::task::spawn(async move {
-            println!("press c to copy command to clipboard, or use the --clipboard argument");
-
-            // `enable_raw_mode` will remember the current terminal mode
-            // and restore it when `disable_raw_mode` is called.
-            enable_raw_mode().unwrap_or_else(|err| eprintln!("Failed to enable raw mode: {err}"));
-            let event_stream = EventStream::new();
-            event_stream
-                .for_each(move |e| match e {
-                    Err(err) => eprintln!("Failed to process event: {err}"),
-                    // c is pressed
-                    Ok(Event::Key(KeyEvent {
-                        code: KeyCode::Char('c'),
-                        modifiers: KeyModifiers::NONE,
-                        kind: KeyEventKind::Press,
-                        ..
-                    })) => add_to_clipboard(&ticket),
-                    // Ctrl+c is pressed
-                    Ok(Event::Key(KeyEvent {
-                        code: KeyCode::Char('c'),
-                        modifiers: KeyModifiers::CONTROL,
-                        kind: KeyEventKind::Press,
-                        ..
-                    })) => {
-                        disable_raw_mode()
-                            .unwrap_or_else(|e| eprintln!("Failed to disable raw mode: {e}"));
-
-                        #[cfg(unix)]
-                        // Safety: Raw syscall to re-send the SIGINT signal to the console.
-                        // `raise` returns nonzero for failure.
-                        if unsafe { raise(SIGINT) } != 0 {
-                            eprintln!("Failed to raise signal: {}", io::Error::last_os_error());
-                        }
-
-                        #[cfg(windows)]
-                        // Safety: Raw syscall to re-send the Ctrl+C event to the console.
-                        // `GenerateConsoleCtrlEvent` returns 0 for failure.
-                        if unsafe { GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0) } == 0 {
-                            eprintln!(
-                                "Failed to generate console event: {}",
-                                io::Error::last_os_error()
-                            );
-                        }
-                    }
-                    _ => {}
-                })
-                .await
-        });
-    }
+    handle_key_press(args.clipboard, ticket);
 
     tokio::signal::ctrl_c().await?;
 
@@ -823,6 +757,75 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     progress.await.ok();
 
     Ok(())
+}
+
+#[cfg(feature = "clipboard")]
+fn handle_key_press(set_clipboard: bool, ticket: BlobTicket) {
+    use crossterm::{
+        event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+        terminal::{disable_raw_mode, enable_raw_mode},
+    };
+
+    #[cfg(any(unix, windows))]
+    use std::io;
+
+    #[cfg(unix)]
+    use libc::{raise, SIGINT};
+
+    #[cfg(windows)]
+    use windows_sys::Win32::System::Console::{GenerateConsoleCtrlEvent, CTRL_C_EVENT};
+
+    if set_clipboard {
+        add_to_clipboard(&ticket);
+    }
+
+    let _keyboard = tokio::task::spawn(async move {
+        println!("press c to copy command to clipboard, or use the --clipboard argument");
+
+        // `enable_raw_mode` will remember the current terminal mode
+        // and restore it when `disable_raw_mode` is called.
+        enable_raw_mode().unwrap_or_else(|err| eprintln!("Failed to enable raw mode: {err}"));
+        EventStream::new()
+            .for_each(move |e| match e {
+                Err(err) => eprintln!("Failed to process event: {err}"),
+                // c is pressed
+                Ok(Event::Key(KeyEvent {
+                    code: KeyCode::Char('c'),
+                    modifiers: KeyModifiers::NONE,
+                    kind: KeyEventKind::Press,
+                    ..
+                })) => add_to_clipboard(&ticket),
+                // Ctrl+c is pressed
+                Ok(Event::Key(KeyEvent {
+                    code: KeyCode::Char('c'),
+                    modifiers: KeyModifiers::CONTROL,
+                    kind: KeyEventKind::Press,
+                    ..
+                })) => {
+                    disable_raw_mode()
+                        .unwrap_or_else(|e| eprintln!("Failed to disable raw mode: {e}"));
+
+                    #[cfg(unix)]
+                    // Safety: Raw syscall to re-send the SIGINT signal to the console.
+                    // `raise` returns nonzero for failure.
+                    if unsafe { raise(SIGINT) } != 0 {
+                        eprintln!("Failed to raise signal: {}", io::Error::last_os_error());
+                    }
+
+                    #[cfg(windows)]
+                    // Safety: Raw syscall to re-send the `CTRL_C_EVENT` to the console.
+                    // `GenerateConsoleCtrlEvent` returns 0 for failure.
+                    if unsafe { GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0) } == 0 {
+                        eprintln!(
+                            "Failed to generate console event: {}",
+                            io::Error::last_os_error()
+                        );
+                    }
+                }
+                _ => {}
+            })
+            .await
+    });
 }
 
 #[cfg(feature = "clipboard")]

@@ -35,11 +35,10 @@ use iroh_blobs::{
     },
     format::collection::Collection,
     get::{request::get_hash_seq_and_sizes, GetError, Stats},
-    net_protocol::Blobs,
     provider::{self, Event},
     store::fs::FsStore,
     ticket::BlobTicket,
-    BlobFormat, Hash,
+    BlobFormat, BlobsProtocol, Hash,
 };
 use n0_future::{task::AbortOnDropHandle, StreamExt};
 use rand::Rng;
@@ -695,7 +694,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         };
         mp.set_draw_target(draw_target);
         let store = FsStore::load(&blobs_data_dir2).await?;
-        let blobs = Blobs::new(&store, endpoint.clone(), Some(progress_tx));
+        let blobs = BlobsProtocol::new(&store, endpoint.clone(), Some(progress_tx));
 
         let import_result = import(path2, blobs.store(), &mut mp).await?;
         let dt = t0.elapsed();
@@ -704,7 +703,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
             .accept(iroh_blobs::ALPN, blobs.clone())
             .spawn();
         // wait for the endpoint to figure out its address before making a ticket
-        let _ = router.endpoint().home_relay().initialized().await?;
+        let _ = router.endpoint().home_relay().initialized().await;
         anyhow::Ok((router, import_result, dt))
     };
     let (router, (temp_tag, size, collection), dt) = select! {
@@ -716,7 +715,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     let hash = *temp_tag.hash();
 
     // make a ticket
-    let mut addr = router.endpoint().node_addr().initialized().await?;
+    let mut addr = router.endpoint().node_addr().initialized().await;
     apply_options(&mut addr, args.ticket_type);
     let ticket = BlobTicket::new(addr, hash, BlobFormat::HashSeq);
     let entry_type = if path.is_file() { "file" } else { "directory" };

@@ -18,8 +18,19 @@ TLS.
 
 # Installation
 
+## Build from Source
 ```
 cargo install sendme
+```
+
+## For Linux/MacOS/Windows (bash)
+```
+curl -fsSL https://iroh.computer/sendme.sh | sh
+```
+
+## For Windows (Run in Powershell)
+```
+iwr https://iroh.computer/sendme.ps1 -useb | iex
 ```
 
 # Usage

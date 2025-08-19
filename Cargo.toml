@@ -57,3 +57,11 @@ tempfile = "3.8.1"
 [features]
 clipboard = ["dep:crossterm", "dep:windows-sys", "dep:libc"]
 default = ["clipboard"]
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+codegen-units = 1
+lto = true
+debug = "none"
+strip = true

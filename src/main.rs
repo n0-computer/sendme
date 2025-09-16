@@ -6,6 +6,7 @@ use std::{
     net::{SocketAddrV4, SocketAddrV6},
     path::{Component, Path, PathBuf},
     str::FromStr,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -35,11 +36,13 @@ use iroh_blobs::{
     },
     format::collection::Collection,
     get::{request::get_hash_seq_and_sizes, GetError, Stats},
-    BlobsProtocol,
-    provider::{self, events::ProviderProto},
+    provider::{
+        self,
+        events::{ConnectMode, EventMask, EventSender, ProviderMessage, RequestUpdate},
+    },
     store::fs::FsStore,
     ticket::BlobTicket,
-    BlobFormat, Hash,
+    BlobFormat, BlobsProtocol, Hash,
 };
 use n0_future::{task::AbortOnDropHandle, StreamExt};
 use rand::Rng;
@@ -483,7 +486,7 @@ async fn export(db: &Store, collection: Collection, mp: &mut MultiProgress) -> a
             .export_with_opts(ExportOptions {
                 hash: *hash,
                 target,
-                mode: ExportMode::TryReference,
+                mode: ExportMode::Copy,
             })
             .stream()
             .await;
@@ -517,128 +520,104 @@ struct PerConnectionProgress {
     requests: BTreeMap<u64, ProgressBar>,
 }
 
-// async fn show_provide_progress(
-//     mp: MultiProgress,
-//     mut recv: mpsc::Receiver<provider::events::ProviderMessage>,
-// ) -> anyhow::Result<()> {
-//     let mut connections = BTreeMap::new();
-//     while let Some(item) = recv.recv().await {
-//         trace!("got event {item:?}");
-//         match item {
-//             Event::ClientConnected {
-//                 connection_id,
-//                 node_id,
-//                 permitted,
-//             } => {
-//                 permitted.send(true).await.ok();
-//                 let pb = mp.add(ProgressBar::hidden());
-//                 pb.set_style(
-//                     indicatif::ProgressStyle::default_bar()
-//                         .template("{msg}") // Only display the message
-//                         .unwrap(),
-//                 );
-//                 pb.set_message(format!("{node_id} {connection_id}"));
-//                 connections.insert(
-//                     connection_id,
-//                     PerConnectionProgress {
-//                         main: pb,
-//                         requests: BTreeMap::new(),
-//                     },
-//                 );
-//             }
-//             Event::ConnectionClosed { connection_id } => {
-//                 let Some(connection) = connections.remove(&connection_id) else {
-//                     error!("got close for unknown connection {connection_id}");
-//                     continue;
-//                 };
-//                 for pb in connection.requests.values() {
-//                     pb.finish_and_clear();
-//                 }
-//                 connection.main.finish_and_clear();
-//             }
-//             Event::GetRequestReceived {
-//                 connection_id,
-//                 request_id,
-//                 hash,
-//                 ..
-//             } => {
-//                 let pb = mp.add(ProgressBar::hidden());
-//                 pb.set_style(
-//                     ProgressStyle::with_template(
-//                         "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}",
-//                     )?
-//                     .progress_chars("#>-"),
-//                 );
-//                 pb.set_message(format!("{request_id} {hash}"));
-//                 let Some(connection) = connections.get_mut(&connection_id) else {
-//                     error!("got request for unknown connection {connection_id}");
-//                     continue;
-//                 };
-//                 connection.requests.insert(request_id, pb);
-//             }
-//             Event::TransferStarted {
-//                 connection_id,
-//                 request_id,
-//                 hash,
-//                 size,
-//                 index,
-//             } => {
-//                 let Some(connection) = connections.get_mut(&connection_id) else {
-//                     error!("got request for unknown connection {connection_id}");
-//                     continue;
-//                 };
-//                 let Some(pb) = connection.requests.get_mut(&request_id) else {
-//                     error!("got update for unknown request {request_id}");
-//                     continue;
-//                 };
-//                 pb.set_message(format!("    {} {} {}", request_id, index, hash.fmt_short()));
-//                 pb.set_length(size);
-//             }
-//             Event::TransferProgress {
-//                 connection_id,
-//                 request_id,
-//                 end_offset,
-//                 ..
-//             } => {
-//                 let Some(connection) = connections.get_mut(&connection_id) else {
-//                     error!("got request for unknown connection {connection_id}");
-//                     continue;
-//                 };
-//                 let Some(pb) = connection.requests.get_mut(&request_id) else {
-//                     error!("got update for unknown request {request_id}");
-//                     continue;
-//                 };
-//                 pb.set_position(end_offset);
-//             }
-//             Event::TransferCompleted {
-//                 connection_id,
-//                 request_id,
-//                 ..
-//             } => {
-//                 if let Some(msg) = connections.get_mut(&connection_id) {
-//                     if let Some(pb) = msg.requests.remove(&request_id) {
-//                         // todo: show stats and hide after a delay
-//                         pb.finish_and_clear();
-//                     }
-//                 }
-//             }
-//             Event::TransferAborted {
-//                 connection_id,
-//                 request_id,
-//                 ..
-//             } => {
-//                 if let Some(msg) = connections.get_mut(&connection_id) {
-//                     if let Some(pb) = msg.requests.remove(&request_id) {
-//                         // todo: show stats and hide after a delay
-//                         pb.finish_and_clear();
-//                     }
-//                 }
-//             }
-//             _ => {}
-//         }
-//     }
-//     Ok(())
-// }
+async fn show_provide_progress(
+    mp: MultiProgress,
+    mut recv: mpsc::Receiver<ProviderMessage>,
+) -> anyhow::Result<()> {
+    let connections = Arc::new(Mutex::new(BTreeMap::new()));
+    while let Some(item) = recv.recv().await {
+        trace!("got event {item:?}");
+        match item {
+            ProviderMessage::ClientConnectedNotify(msg) => {
+                let pb = mp.add(ProgressBar::hidden());
+                pb.set_style(
+                    indicatif::ProgressStyle::default_bar()
+                        .template("{msg}") // Only display the message
+                        .unwrap(),
+                );
+                let node_id = msg.node_id;
+                let connection_id = msg.connection_id;
+                pb.set_message(format!("{node_id:?} {connection_id}"));
+                connections.lock().unwrap().insert(
+                    connection_id,
+                    PerConnectionProgress {
+                        main: pb,
+                        requests: BTreeMap::new(),
+                    },
+                );
+            }
+            ProviderMessage::ConnectionClosed(msg) => {
+                let Some(connection) = connections.lock().unwrap().remove(&msg.connection_id)
+                else {
+                    error!("got close for unknown connection {}", msg.connection_id);
+                    continue;
+                };
+                for pb in connection.requests.values() {
+                    pb.finish_and_clear();
+                }
+                connection.main.finish_and_clear();
+            }
+            ProviderMessage::GetRequestReceivedNotify(mut msg) => {
+                let pb = mp.add(ProgressBar::hidden());
+                pb.set_style(
+                    ProgressStyle::with_template(
+                        "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}",
+                    )?
+                    .progress_chars("#>-"),
+                );
+                let request_id = msg.request_id;
+                let connection_id = msg.connection_id;
+                let hash = msg.request.hash;
+                pb.set_message(format!("{request_id} {hash}"));
+                if let Some(connection) = connections.lock().unwrap().get_mut(&connection_id) {
+                    connection.requests.insert(request_id, pb.clone());
+                } else {
+                    error!("got request for unknown connection {connection_id}");
+                    continue;
+                };
+                let connections = connections.clone();
+                tokio::spawn(async move {
+                    while let Ok(Some(msg)) = msg.rx.recv().await {
+                        match msg {
+                            RequestUpdate::Started(msg) => {
+                                pb.set_message(format!(
+                                    "    {} {} {}",
+                                    request_id,
+                                    msg.index,
+                                    hash.fmt_short()
+                                ));
+                                pb.set_length(msg.size);
+                            }
+                            RequestUpdate::Progress(msg) => {
+                                pb.set_position(msg.end_offset);
+                            }
+                            RequestUpdate::Completed(_) => {
+                                if let Some(msg) =
+                                    connections.lock().unwrap().get_mut(&connection_id)
+                                {
+                                    msg.requests.remove(&request_id);
+                                };
+                                // todo: show stats and hide after a delay
+                                pb.finish_and_clear();
+                            }
+                            RequestUpdate::Aborted(_) => {
+                                if let Some(msg) =
+                                    connections.lock().unwrap().get_mut(&connection_id)
+                                {
+                                    msg.requests.remove(&request_id);
+                                };
+                                // todo: show stats and hide after a delay
+                                pb.finish_and_clear();
+                            }
+                        }
+                    }
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
 
 async fn send(args: SendArgs) -> anyhow::Result<()> {
     let secret_key = get_or_create_secret(args.common.verbose > 0)?;
@@ -678,11 +657,11 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     let path = args.path;
     let path2 = path.clone();
     let blobs_data_dir2 = blobs_data_dir.clone();
-    // let (progress_tx, progress_rx) = mpsc::channel(32);
-    // let progress = AbortOnDropHandle::new(n0_future::task::spawn(show_provide_progress(
-    //     mp2,
-    //     progress_rx,
-    // )));
+    let (progress_tx, progress_rx) = mpsc::channel(32);
+    let progress = AbortOnDropHandle::new(n0_future::task::spawn(show_provide_progress(
+        mp2,
+        progress_rx,
+    )));
     let setup = async move {
         let t0 = Instant::now();
         tokio::fs::create_dir_all(&blobs_data_dir2).await?;
@@ -695,7 +674,18 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         };
         mp.set_draw_target(draw_target);
         let store = FsStore::load(&blobs_data_dir2).await?;
-        let blobs = BlobsProtocol::new(&store, endpoint.clone(), None);
+        let blobs = BlobsProtocol::new(
+            &store,
+            endpoint.clone(),
+            Some(EventSender::new(
+                progress_tx,
+                EventMask {
+                    connected: ConnectMode::Notify,
+                    get: provider::events::RequestMode::NotifyLog,
+                    ..EventMask::DEFAULT
+                },
+            )),
+        );
 
         let import_result = import(path2, blobs.store(), &mut mp).await?;
         let dt = t0.elapsed();
@@ -771,7 +761,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     // drop everything that owns blobs to close the progress sender
     drop(router);
     // await progress completion so the progress bar is cleared
-    // progress.await.ok();
+    progress.await.ok();
 
     Ok(())
 }

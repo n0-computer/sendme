@@ -671,6 +671,12 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         );
         std::process::exit(1);
     }
+    // todo: remove this as soon as we have a mem store that does not require a temp dir,
+    // or create a temp dir outside the current directory.
+    if cwd.join(&args.path) == cwd {
+        println!("can not share from the current directory");
+        std::process::exit(1);
+    }
 
     let mut mp = MultiProgress::new();
     let mp2 = mp.clone();

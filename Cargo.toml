@@ -24,14 +24,14 @@ derive_more = { version = "1.0.0", features = [
 # I had some issues with futures-buffered 0.2.9
 futures-buffered = "0.2.11"
 indicatif = "0.17.7"
-iroh-blobs = { version = "0.92" }
-iroh = "0.91"
+iroh-blobs = { version = "0.94" }
+iroh = "0.92"
 num_cpus = "1.16.0"
 rand = "0.8.5"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1.34.0", features = ["full"] }
 tracing = "0.1.40"
-tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 walkdir = "2.4.0"
 data-encoding = "2.6.0"
 n0-future = "0.1.2"
@@ -40,6 +40,7 @@ crossterm = { version = "0.29.0", features = [
   "event-stream",
   "osc52",
 ], optional = true }
+irpc = "0.8.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = { version = "0.2.174", optional = true }

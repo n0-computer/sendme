@@ -6,6 +6,7 @@ use std::{
     net::{SocketAddrV4, SocketAddrV6},
     path::{Component, Path, PathBuf},
     str::FromStr,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -35,12 +36,15 @@ use iroh_blobs::{
     },
     format::collection::Collection,
     get::{request::get_hash_seq_and_sizes, GetError, Stats},
-    provider::{self, Event},
+    provider::{
+        self,
+        events::{ConnectMode, EventMask, EventSender, ProviderMessage, RequestUpdate},
+    },
     store::fs::FsStore,
     ticket::BlobTicket,
     BlobFormat, BlobsProtocol, Hash,
 };
-use n0_future::{task::AbortOnDropHandle, StreamExt};
+use n0_future::{task::AbortOnDropHandle, FuturesUnordered, StreamExt};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tokio::{select, sync::mpsc};
@@ -482,7 +486,7 @@ async fn export(db: &Store, collection: Collection, mp: &mut MultiProgress) -> a
             .export_with_opts(ExportOptions {
                 hash: *hash,
                 target,
-                mode: ExportMode::TryReference,
+                mode: ExportMode::Copy,
             })
             .stream()
             .await;
@@ -512,130 +516,112 @@ async fn export(db: &Store, collection: Collection, mp: &mut MultiProgress) -> a
 
 #[derive(Debug)]
 struct PerConnectionProgress {
-    main: ProgressBar,
+    node_id: String,
     requests: BTreeMap<u64, ProgressBar>,
+}
+
+async fn per_request_progress(
+    mp: MultiProgress,
+    connection_id: u64,
+    request_id: u64,
+    connections: Arc<Mutex<BTreeMap<u64, PerConnectionProgress>>>,
+    mut rx: irpc::channel::mpsc::Receiver<RequestUpdate>,
+) {
+    let pb = mp.add(ProgressBar::hidden());
+    let node_id = if let Some(connection) = connections.lock().unwrap().get_mut(&connection_id) {
+        connection.requests.insert(request_id, pb.clone());
+        connection.node_id.clone()
+    } else {
+        error!("got request for unknown connection {connection_id}");
+        return;
+    };
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}",
+        ).unwrap()
+        .progress_chars("#>-"),
+    );
+    while let Ok(Some(msg)) = rx.recv().await {
+        match msg {
+            RequestUpdate::Started(msg) => {
+                pb.set_message(format!(
+                    "n {} r {}/{} i {} # {}",
+                    node_id,
+                    connection_id,
+                    request_id,
+                    msg.index,
+                    msg.hash.fmt_short()
+                ));
+                pb.set_length(msg.size);
+            }
+            RequestUpdate::Progress(msg) => {
+                pb.set_position(msg.end_offset);
+            }
+            RequestUpdate::Completed(_) => {
+                if let Some(msg) = connections.lock().unwrap().get_mut(&connection_id) {
+                    msg.requests.remove(&request_id);
+                };
+            }
+            RequestUpdate::Aborted(_) => {
+                if let Some(msg) = connections.lock().unwrap().get_mut(&connection_id) {
+                    msg.requests.remove(&request_id);
+                };
+            }
+        }
+    }
+    pb.finish_and_clear();
+    mp.remove(&pb);
 }
 
 async fn show_provide_progress(
     mp: MultiProgress,
-    mut recv: mpsc::Receiver<provider::Event>,
+    mut recv: mpsc::Receiver<ProviderMessage>,
 ) -> anyhow::Result<()> {
-    let mut connections = BTreeMap::new();
-    while let Some(item) = recv.recv().await {
-        trace!("got event {item:?}");
-        match item {
-            Event::ClientConnected {
-                connection_id,
-                node_id,
-                permitted,
-            } => {
-                permitted.send(true).await.ok();
-                let pb = mp.add(ProgressBar::hidden());
-                pb.set_style(
-                    indicatif::ProgressStyle::default_bar()
-                        .template("{msg}") // Only display the message
-                        .unwrap(),
-                );
-                pb.set_message(format!("{node_id} {connection_id}"));
-                connections.insert(
-                    connection_id,
-                    PerConnectionProgress {
-                        main: pb,
-                        requests: BTreeMap::new(),
-                    },
-                );
-            }
-            Event::ConnectionClosed { connection_id } => {
-                let Some(connection) = connections.remove(&connection_id) else {
-                    error!("got close for unknown connection {connection_id}");
-                    continue;
+    let connections = Arc::new(Mutex::new(BTreeMap::new()));
+    let mut tasks = FuturesUnordered::new();
+    loop {
+        tokio::select! {
+            biased;
+            item = recv.recv() => {
+                let Some(item) = item else {
+                    break;
                 };
-                for pb in connection.requests.values() {
-                    pb.finish_and_clear();
-                }
-                connection.main.finish_and_clear();
-            }
-            Event::GetRequestReceived {
-                connection_id,
-                request_id,
-                hash,
-                ..
-            } => {
-                let pb = mp.add(ProgressBar::hidden());
-                pb.set_style(
-                    ProgressStyle::with_template(
-                        "{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes}",
-                    )?
-                    .progress_chars("#>-"),
-                );
-                pb.set_message(format!("{request_id} {hash}"));
-                let Some(connection) = connections.get_mut(&connection_id) else {
-                    error!("got request for unknown connection {connection_id}");
-                    continue;
-                };
-                connection.requests.insert(request_id, pb);
-            }
-            Event::TransferStarted {
-                connection_id,
-                request_id,
-                hash,
-                size,
-                index,
-            } => {
-                let Some(connection) = connections.get_mut(&connection_id) else {
-                    error!("got request for unknown connection {connection_id}");
-                    continue;
-                };
-                let Some(pb) = connection.requests.get_mut(&request_id) else {
-                    error!("got update for unknown request {request_id}");
-                    continue;
-                };
-                pb.set_message(format!("    {} {} {}", request_id, index, hash.fmt_short()));
-                pb.set_length(size);
-            }
-            Event::TransferProgress {
-                connection_id,
-                request_id,
-                end_offset,
-                ..
-            } => {
-                let Some(connection) = connections.get_mut(&connection_id) else {
-                    error!("got request for unknown connection {connection_id}");
-                    continue;
-                };
-                let Some(pb) = connection.requests.get_mut(&request_id) else {
-                    error!("got update for unknown request {request_id}");
-                    continue;
-                };
-                pb.set_position(end_offset);
-            }
-            Event::TransferCompleted {
-                connection_id,
-                request_id,
-                ..
-            } => {
-                if let Some(msg) = connections.get_mut(&connection_id) {
-                    if let Some(pb) = msg.requests.remove(&request_id) {
-                        // todo: show stats and hide after a delay
-                        pb.finish_and_clear();
+
+                trace!("got event {item:?}");
+                match item {
+                    ProviderMessage::ClientConnectedNotify(msg) => {
+                        let node_id = msg.node_id.map(|id| id.fmt_short()).unwrap_or_else(|| "?".to_string());
+                        let connection_id = msg.connection_id;
+                        connections.lock().unwrap().insert(
+                            connection_id,
+                            PerConnectionProgress {
+                                requests: BTreeMap::new(),
+                                node_id,
+                            },
+                        );
                     }
-                }
-            }
-            Event::TransferAborted {
-                connection_id,
-                request_id,
-                ..
-            } => {
-                if let Some(msg) = connections.get_mut(&connection_id) {
-                    if let Some(pb) = msg.requests.remove(&request_id) {
-                        // todo: show stats and hide after a delay
-                        pb.finish_and_clear();
+                    ProviderMessage::ConnectionClosed(msg) => {
+                        if let Some(connection) = connections.lock().unwrap().remove(&msg.connection_id) {
+                            for pb in connection.requests.values() {
+                                pb.finish_and_clear();
+                                mp.remove(pb);
+                            }
+                        }
                     }
+                    ProviderMessage::GetRequestReceivedNotify(msg) => {
+                        let request_id = msg.request_id;
+                        let connection_id = msg.connection_id;
+                        let connections = connections.clone();
+                        let mp = mp.clone();
+                        tasks.push(per_request_progress(mp, connection_id, request_id, connections, msg.rx));
+                    }
+                    _ => {}
                 }
             }
-            _ => {}
+            Some(_) = tasks.next(), if !tasks.is_empty() => {}
         }
     }
+    while tasks.next().await.is_some() {}
     Ok(())
 }
 
@@ -700,7 +686,18 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         };
         mp.set_draw_target(draw_target);
         let store = FsStore::load(&blobs_data_dir2).await?;
-        let blobs = BlobsProtocol::new(&store, endpoint.clone(), Some(progress_tx));
+        let blobs = BlobsProtocol::new(
+            &store,
+            endpoint.clone(),
+            Some(EventSender::new(
+                progress_tx,
+                EventMask {
+                    connected: ConnectMode::Notify,
+                    get: provider::events::RequestMode::NotifyLog,
+                    ..EventMask::DEFAULT
+                },
+            )),
+        );
 
         let import_result = import(path2, blobs.store(), &mut mp).await?;
         let dt = t0.elapsed();
@@ -766,17 +763,15 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
 
 #[cfg(feature = "clipboard")]
 fn handle_key_press(set_clipboard: bool, ticket: BlobTicket) {
+    #[cfg(any(unix, windows))]
+    use std::io;
+
     use crossterm::{
         event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
         terminal::{disable_raw_mode, enable_raw_mode},
     };
-
-    #[cfg(any(unix, windows))]
-    use std::io;
-
     #[cfg(unix)]
     use libc::{raise, SIGINT};
-
     #[cfg(windows)]
     use windows_sys::Win32::System::Console::{GenerateConsoleCtrlEvent, CTRL_C_EVENT};
 

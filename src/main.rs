@@ -479,7 +479,9 @@ async fn export(db: &Store, collection: Collection, mp: &mut MultiProgress) -> a
                 "target {} already exists. Export stopped.",
                 target.display()
             );
-            eprintln!("You can remove the file or directory and try again. The download will not be repeated.");
+            eprintln!(
+                "You can remove the file or directory and try again. The download will not be repeated."
+            );
             anyhow::bail!("target {} already exists", target.display());
         }
         let mut stream = db
@@ -632,10 +634,11 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         eprintln!("using secret key {secret_key}");
     }
     // create a magicsocket endpoint
+    let relay_mode: RelayMode = args.common.relay.into();
     let mut builder = Endpoint::builder()
         .alpns(vec![iroh_blobs::protocol::ALPN.to_vec()])
         .secret_key(secret_key)
-        .relay_mode(args.common.relay.into());
+        .relay_mode(relay_mode.clone());
     if args.ticket_type == AddrInfoOptions::Id {
         builder = builder.add_discovery(PkarrPublisher::n0_dns());
     }
@@ -647,7 +650,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     }
 
     // use a flat store - todo: use a partial in mem store instead
-    let suffix = rand::thread_rng().gen::<[u8; 16]>();
+    let suffix = rand::thread_rng().r#gen::<[u8; 16]>();
     let cwd = std::env::current_dir()?;
     let blobs_data_dir = cwd.join(format!(".sendme-send-{}", HEXLOWER.encode(&suffix)));
     if blobs_data_dir.exists() {
@@ -705,8 +708,19 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         let router = iroh::protocol::Router::builder(endpoint)
             .accept(iroh_blobs::ALPN, blobs.clone())
             .spawn();
+
         // wait for the endpoint to figure out its address before making a ticket
-        let _ = router.endpoint().home_relay().initialized().await;
+        let ep = router.endpoint();
+        tokio::time::timeout(Duration::from_secs(30), async move {
+            if matches!(relay_mode, RelayMode::Disabled) {
+                // no relay will arrive, as we disabled it, so wait for general init
+                let _ = ep.node_addr().initialized().await;
+            } else {
+                let _ = ep.home_relay().initialized().await;
+            }
+        })
+        .await?;
+
         anyhow::Ok((router, import_result, dt))
     };
     let (router, (temp_tag, size, collection), dt) = select! {

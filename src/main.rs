@@ -873,7 +873,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
             },
         );
 
-        if args.zstd {
+        let (router, import_result, dt) = if args.zstd {
             let compression = zstd::Compression;
             let blobs = CompressedBlobsProtocol::new(
                 &store,
@@ -881,46 +881,30 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
                 compression,
                 args.compression_quality,
             );
-            //Box::new(BlobsProtocol::new(&store, Some(event_sender)))
-
             let import_result = import(path2, &blobs.store, &mut mp).await?;
-            let dt = t0.elapsed();
-
             let router = iroh::protocol::Router::builder(endpoint)
                 .accept(zstd::Compression::ALPN, blobs.clone())
                 .spawn();
-
-            // wait for the endpoint to figure out its address before making a ticket
-            let ep = router.endpoint();
-            tokio::time::timeout(Duration::from_secs(30), async move {
-                if !matches!(relay_mode, RelayMode::Disabled) {
-                    let _ = ep.online().await;
-                }
-            })
-            .await?;
-
-            return anyhow::Ok((router, import_result, dt));
+            (router, import_result, t0.elapsed())
         } else {
             let blobs = BlobsProtocol::new(&store, Some(event_sender));
-
             let import_result = import(path2, &blobs.store(), &mut mp).await?;
-            let dt = t0.elapsed();
-
             let router = iroh::protocol::Router::builder(endpoint)
                 .accept(iroh_blobs::ALPN, blobs.clone())
                 .spawn();
+            (router, import_result, t0.elapsed())
+        };
 
-            // wait for the endpoint to figure out its address before making a ticket
-            let ep = router.endpoint();
-            tokio::time::timeout(Duration::from_secs(30), async move {
-                if !matches!(relay_mode, RelayMode::Disabled) {
-                    let _ = ep.online().await;
-                }
-            })
-            .await?;
+        // wait for the endpoint to figure out its address before making a ticket
+        let ep = router.endpoint();
+        tokio::time::timeout(Duration::from_secs(30), async move {
+            if !matches!(relay_mode, RelayMode::Disabled) {
+                let _ = ep.online().await;
+            }
+        })
+        .await?;
 
-            return anyhow::Ok((router, import_result, dt));
-        }
+        return anyhow::Ok((router, import_result, dt));
     };
     let (router, (temp_tag, size, collection), dt) = select! {
         x = setup => x?,

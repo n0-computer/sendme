@@ -34,7 +34,7 @@ use iroh_blobs::{
             AddPathOptions, AddProgressItem, ExportMode, ExportOptions, ExportProgressItem,
             ImportMode,
         },
-        remote::{GetProgressItem, GetStreamPair, LocalInfo},
+        remote::{GetProgressItem, GetStreamPair},
         Store, TempTag,
     },
     format::collection::Collection,
@@ -330,6 +330,7 @@ trait Compression: Clone + Send + Sync + Debug + 'static {
     fn send_stream(
         &self,
         stream: iroh::endpoint::SendStream,
+        compression_level: u8,
     ) -> impl iroh_blobs::util::SendStream + Sync + 'static;
 }
 
@@ -337,6 +338,7 @@ mod zstd {
     use std::io;
 
     use async_compression::tokio::{bufread::ZstdDecoder, write::ZstdEncoder};
+    use async_compression::Level;
     use iroh::endpoint::VarInt;
     use iroh_blobs::util::{
         AsyncReadRecvStream, AsyncReadRecvStreamExtra, AsyncWriteSendStream,
@@ -347,8 +349,15 @@ mod zstd {
     struct SendStream(ZstdEncoder<iroh::endpoint::SendStream>);
 
     impl SendStream {
-        pub fn new(inner: iroh::endpoint::SendStream) -> AsyncWriteSendStream<Self> {
-            AsyncWriteSendStream::new(Self(ZstdEncoder::new(inner)))
+        pub fn new(
+            inner: iroh::endpoint::SendStream,
+            compression_level: u8,
+        ) -> AsyncWriteSendStream<Self> {
+            let c_level = compression_level.clamp(1, 22);
+            AsyncWriteSendStream::new(Self(ZstdEncoder::with_quality(
+                inner,
+                Level::Precise(c_level as _),
+            )))
         }
     }
 
@@ -406,8 +415,9 @@ mod zstd {
         fn send_stream(
             &self,
             stream: iroh::endpoint::SendStream,
+            compression_level: u8,
         ) -> impl iroh_blobs::util::SendStream + Sync + 'static {
-            SendStream::new(stream)
+            SendStream::new(stream, compression_level)
         }
     }
 }
@@ -417,14 +427,16 @@ struct CompressedBlobsProtocol<C: Compression> {
     store: Store,
     events: EventSender,
     compression: C,
+    compression_level: u8,
 }
 
 impl<C: Compression> CompressedBlobsProtocol<C> {
-    fn new(store: &Store, events: EventSender, compression: C) -> Self {
+    fn new(store: &Store, events: EventSender, compression: C, compression_level: u8) -> Self {
         Self {
             store: store.clone(),
             events,
             compression,
+            compression_level,
         }
     }
 }
@@ -448,7 +460,7 @@ impl<C: Compression> ProtocolHandler for CompressedBlobsProtocol<C> {
             return Ok(());
         }
         while let Ok((send, recv)) = connection.accept_bi().await {
-            let send = self.compression.send_stream(send);
+            let send = self.compression.send_stream(send, self.compression_level);
             let recv = self.compression.recv_stream(recv);
             let store = self.store.clone();
             let pair = provider::StreamPair::new(connection_id, recv, send, self.events.clone());
@@ -863,7 +875,12 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
 
         if args.zstd {
             let compression = zstd::Compression;
-            let blobs = CompressedBlobsProtocol::new(&store, event_sender, compression);
+            let blobs = CompressedBlobsProtocol::new(
+                &store,
+                event_sender,
+                compression,
+                args.compression_quality,
+            );
             //Box::new(BlobsProtocol::new(&store, Some(event_sender)))
 
             let import_result = import(path2, &blobs.store, &mut mp).await?;
@@ -1184,7 +1201,7 @@ impl GetStreamPair for ZstdConn {
         async move {
             let connection_id = self.connection.stable_id() as u64;
             let (send, recv) = self.connection.open_bi().await?;
-            let send = zstd::Compression.send_stream(send);
+            let send = zstd::Compression.send_stream(send, 3);
             let recv = zstd::Compression.recv_stream(recv);
             Ok(StreamPair::new(connection_id, recv, send))
         }

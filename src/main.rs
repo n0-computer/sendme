@@ -21,22 +21,24 @@ use futures_buffered::BufferedStreamExt;
 use indicatif::{
     HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
 };
-use iroh::protocol::ProtocolHandler;
+#[cfg(feature = "zstd")]
+use iroh::endpoint::ConnectOptions;
 use iroh::{
     discovery::{dns::DnsDiscovery, pkarr::PkarrPublisher},
     Endpoint, NodeAddr, RelayMode, RelayUrl, SecretKey,
 };
+use iroh::{endpoint::Connection, protocol::ProtocolHandler};
 use iroh_blobs::{
     api::{
         blobs::{
             AddPathOptions, AddProgressItem, ExportMode, ExportOptions, ExportProgressItem,
             ImportMode,
         },
-        remote::GetProgressItem,
+        remote::{GetProgressItem, GetStreamPair, LocalInfo},
         Store, TempTag,
     },
     format::collection::Collection,
-    get::{request::get_hash_seq_and_sizes, GetError, Stats},
+    get::{request::get_hash_seq_and_sizes, GetError, Stats, StreamPair},
     provider::{
         self,
         events::{
@@ -47,11 +49,13 @@ use iroh_blobs::{
     },
     store::fs::FsStore,
     ticket::BlobTicket,
+    util::{RecvStream, SendStream},
     BlobFormat, BlobsProtocol, Hash,
 };
-use n0_future::{task::AbortOnDropHandle, FuturesUnordered, StreamExt};
+use n0_future::{io, task::AbortOnDropHandle, FuturesUnordered, StreamExt};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use tokio::{select, sync::mpsc};
 use tracing::{error, trace};
 use walkdir::WalkDir;
@@ -1168,6 +1172,25 @@ fn show_get_error(e: GetError) -> GetError {
     e
 }
 
+struct ZstdConn {
+    connection: Connection,
+}
+
+impl GetStreamPair for ZstdConn {
+    fn open_stream_pair(
+        self,
+    ) -> impl Future<Output = io::Result<StreamPair<impl RecvStream, impl SendStream>>> + Send + 'static
+    {
+        async move {
+            let connection_id = self.connection.stable_id() as u64;
+            let (send, recv) = self.connection.open_bi().await?;
+            let send = zstd::Compression.send_stream(send);
+            let recv = zstd::Compression.recv_stream(recv);
+            Ok(StreamPair::new(connection_id, recv, send))
+        }
+    }
+}
+
 async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     let ticket = args.ticket;
     let addr = ticket.node_addr().clone();
@@ -1208,34 +1231,70 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
         let (stats, total_files, payload_size) = if !local.is_complete() {
             trace!("{} not complete", hash_and_format.hash);
             let cp = mp.add(make_connect_progress());
-            let connection = endpoint.connect(addr, iroh_blobs::protocol::ALPN).await?;
-            cp.finish_and_clear();
-            let sp = mp.add(make_get_sizes_progress());
-            let (_hash_seq, sizes) =
-                get_hash_seq_and_sizes(&connection, &hash_and_format.hash, 1024 * 1024 * 32, None)
-                    .await
-                    .map_err(show_get_error)?;
-            sp.finish_and_clear();
-            let total_size = sizes.iter().copied().sum::<u64>();
-            let payload_size = sizes.iter().skip(2).copied().sum::<u64>();
-            let total_files = (sizes.len().saturating_sub(1)) as u64;
-            eprintln!(
-                "getting collection {} {} files, {}",
-                print_hash(&ticket.hash(), args.common.format),
-                total_files,
-                HumanBytes(payload_size)
-            );
-            // print the details of the collection only in verbose mode
-            if args.common.verbose > 0 {
+
+            #[cfg(feature = "zstd")]
+            let options =
+                ConnectOptions::new().with_additional_alpns(vec![zstd::Compression::ALPN.to_vec()]);
+
+            #[cfg(not(feature = "zstd"))]
+            let options = Default::default();
+
+            let mut connecting = endpoint
+                .connect_with_opts(addr, iroh_blobs::ALPN, options)
+                .await?;
+            let using_zstd: bool = match connecting.alpn().await {
+                Ok(alpn_vec) => alpn_vec == zstd::Compression::ALPN.to_vec(),
+                Err(e) => {
+                    anyhow::bail!(
+                        "This build of sendme does not support receiving with compression: {}",
+                        e
+                    );
+                }
+            };
+
+            let connection = connecting.await?;
+            let (total_size, payload_size, total_files) = if !using_zstd {
+                cp.finish_and_clear();
+                let sp = mp.add(make_get_sizes_progress());
+                let (_hash_seq, sizes) = get_hash_seq_and_sizes(
+                    &connection,
+                    &hash_and_format.hash,
+                    1024 * 1024 * 32,
+                    None,
+                )
+                .await
+                .map_err(show_get_error)?;
+                sp.finish_and_clear();
+                let total_size = sizes.iter().copied().sum::<u64>();
+                let payload_size = sizes.iter().skip(2).copied().sum::<u64>();
+                let total_files = (sizes.len().saturating_sub(1)) as u64;
                 eprintln!(
-                    "getting {} blobs in total, {}",
-                    total_files + 1,
-                    HumanBytes(total_size)
+                    "getting collection {} {} files, {}",
+                    print_hash(&ticket.hash(), args.common.format),
+                    total_files,
+                    HumanBytes(payload_size)
                 );
-            }
+                // print the details of the collection only in verbose mode
+                if args.common.verbose > 0 {
+                    eprintln!(
+                        "getting {} blobs in total, {}",
+                        total_files + 1,
+                        HumanBytes(total_size)
+                    );
+                }
+                (total_files, payload_size, total_files)
+            } else {
+                (0, 0, 0)
+            };
+
             let (tx, rx) = mpsc::channel(32);
             let local_size = local.local_bytes();
-            let get = db.remote().execute_get(connection, local.missing());
+            let get = if using_zstd {
+                let zstd_conn = ZstdConn { connection };
+                db.remote().execute_get(zstd_conn, local.missing())
+            } else {
+                db.remote().execute_get(connection, local.missing())
+            };
             let task = tokio::spawn(show_download_progress(
                 mp.clone(),
                 rx,

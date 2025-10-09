@@ -2,7 +2,7 @@
 
 use std::{
     collections::BTreeMap,
-    fmt::{Display, Formatter},
+    fmt::{Debug, Display, Formatter},
     net::{SocketAddrV4, SocketAddrV6},
     path::{Component, Path, PathBuf},
     str::FromStr,
@@ -21,6 +21,7 @@ use futures_buffered::BufferedStreamExt;
 use indicatif::{
     HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
 };
+use iroh::protocol::ProtocolHandler;
 use iroh::{
     discovery::{dns::DnsDiscovery, pkarr::PkarrPublisher},
     Endpoint, NodeAddr, RelayMode, RelayUrl, SecretKey,
@@ -38,7 +39,11 @@ use iroh_blobs::{
     get::{request::get_hash_seq_and_sizes, GetError, Stats},
     provider::{
         self,
-        events::{ConnectMode, EventMask, EventSender, ProviderMessage, RequestUpdate},
+        events::{
+            ClientConnected, ConnectMode, EventMask, EventSender, HasErrorCode, ProviderMessage,
+            RequestUpdate,
+        },
+        handle_stream,
     },
     store::fs::FsStore,
     ticket::BlobTicket,
@@ -175,7 +180,7 @@ impl Display for RelayModeOption {
         match self {
             Self::Disabled => f.write_str("disabled"),
             Self::Default => f.write_str("default"),
-            Self::Custom(url) => url.fmt(f),
+            Self::Custom(url) => std::fmt::Display::fmt(&url, f),
         }
     }
 }
@@ -221,6 +226,16 @@ pub struct SendArgs {
     #[cfg(feature = "clipboard")]
     #[clap(short = 'c', long)]
     pub clipboard: bool,
+
+    /// Use zstd to compress outgoing and decompress incoming data
+    #[cfg(feature = "zstd")]
+    #[clap(short = 'z', long)]
+    pub zstd: bool,
+
+    /// Compression level for zstd
+    #[cfg(feature = "zstd")]
+    #[clap(short = 'q', long, default_value_t = 3, requires("zstd"))]
+    pub compression_quality: u8,
 }
 
 #[derive(Parser, Debug)]
@@ -300,6 +315,143 @@ fn validate_path_component(component: &str) -> anyhow::Result<()> {
         "path components must not contain the only correct path separator, /"
     );
     Ok(())
+}
+
+trait Compression: Clone + Send + Sync + Debug + 'static {
+    const ALPN: &'static [u8];
+    fn recv_stream(
+        &self,
+        stream: iroh::endpoint::RecvStream,
+    ) -> impl iroh_blobs::util::RecvStream + Sync + 'static;
+    fn send_stream(
+        &self,
+        stream: iroh::endpoint::SendStream,
+    ) -> impl iroh_blobs::util::SendStream + Sync + 'static;
+}
+
+mod zstd {
+    use std::io;
+
+    use async_compression::tokio::{bufread::ZstdDecoder, write::ZstdEncoder};
+    use iroh::endpoint::VarInt;
+    use iroh_blobs::util::{
+        AsyncReadRecvStream, AsyncReadRecvStreamExtra, AsyncWriteSendStream,
+        AsyncWriteSendStreamExtra,
+    };
+    use tokio::io::{AsyncRead, AsyncWrite, BufReader};
+
+    struct SendStream(ZstdEncoder<iroh::endpoint::SendStream>);
+
+    impl SendStream {
+        pub fn new(inner: iroh::endpoint::SendStream) -> AsyncWriteSendStream<Self> {
+            AsyncWriteSendStream::new(Self(ZstdEncoder::new(inner)))
+        }
+    }
+
+    impl AsyncWriteSendStreamExtra for SendStream {
+        fn inner(&mut self) -> &mut (impl AsyncWrite + Unpin + Send) {
+            &mut self.0
+        }
+
+        fn reset(&mut self, code: VarInt) -> io::Result<()> {
+            Ok(self.0.get_mut().reset(code)?)
+        }
+
+        async fn stopped(&mut self) -> io::Result<Option<VarInt>> {
+            Ok(self.0.get_mut().stopped().await?)
+        }
+
+        fn id(&self) -> u64 {
+            self.0.get_ref().id().index()
+        }
+    }
+
+    struct RecvStream(ZstdDecoder<BufReader<iroh::endpoint::RecvStream>>);
+
+    impl RecvStream {
+        pub fn new(inner: iroh::endpoint::RecvStream) -> AsyncReadRecvStream<Self> {
+            AsyncReadRecvStream::new(Self(ZstdDecoder::new(BufReader::new(inner))))
+        }
+    }
+
+    impl AsyncReadRecvStreamExtra for RecvStream {
+        fn inner(&mut self) -> &mut (impl AsyncRead + Unpin + Send) {
+            &mut self.0
+        }
+
+        fn stop(&mut self, code: VarInt) -> io::Result<()> {
+            Ok(self.0.get_mut().get_mut().stop(code)?)
+        }
+
+        fn id(&self) -> u64 {
+            self.0.get_ref().get_ref().id().index()
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct Compression;
+
+    impl super::Compression for Compression {
+        const ALPN: &[u8] = concat_const::concat_bytes!(b"zstd/", iroh_blobs::ALPN);
+        fn recv_stream(
+            &self,
+            stream: iroh::endpoint::RecvStream,
+        ) -> impl iroh_blobs::util::RecvStream + Sync + 'static {
+            RecvStream::new(stream)
+        }
+        fn send_stream(
+            &self,
+            stream: iroh::endpoint::SendStream,
+        ) -> impl iroh_blobs::util::SendStream + Sync + 'static {
+            SendStream::new(stream)
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CompressedBlobsProtocol<C: Compression> {
+    store: Store,
+    events: EventSender,
+    compression: C,
+}
+
+impl<C: Compression> CompressedBlobsProtocol<C> {
+    fn new(store: &Store, events: EventSender, compression: C) -> Self {
+        Self {
+            store: store.clone(),
+            events,
+            compression,
+        }
+    }
+}
+
+impl<C: Compression> ProtocolHandler for CompressedBlobsProtocol<C> {
+    async fn accept(
+        &self,
+        connection: iroh::endpoint::Connection,
+    ) -> std::result::Result<(), iroh::protocol::AcceptError> {
+        let connection_id = connection.stable_id() as u64;
+        if let Err(cause) = self
+            .events
+            .client_connected(|| ClientConnected {
+                connection_id,
+                node_id: connection.remote_node_id().ok(),
+            })
+            .await
+        {
+            connection.close(cause.code(), cause.reason());
+            // debug!("closing connection: {cause}");
+            return Ok(());
+        }
+        while let Ok((send, recv)) = connection.accept_bi().await {
+            let send = self.compression.send_stream(send);
+            let recv = self.compression.recv_stream(recv);
+            let store = self.store.clone();
+            let pair = provider::StreamPair::new(connection_id, recv, send, self.events.clone());
+            tokio::spawn(handle_stream(pair, store));
+        }
+        Ok(())
+    }
 }
 
 /// This function converts an already canonicalized path to a string.
@@ -634,9 +786,15 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         eprintln!("using secret key {secret_key}");
     }
     // create a magicsocket endpoint
+    let alpn: Vec<u8> = if args.zstd {
+        zstd::Compression::ALPN.to_vec()
+    } else {
+        iroh_blobs::protocol::ALPN.to_vec()
+    };
+
     let relay_mode: RelayMode = args.common.relay.into();
     let mut builder = Endpoint::builder()
-        .alpns(vec![iroh_blobs::protocol::ALPN.to_vec()])
+        .alpns(vec![alpn])
         .secret_key(secret_key)
         .relay_mode(relay_mode.clone());
     if args.ticket_type == AddrInfoOptions::Id {
@@ -689,35 +847,59 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         };
         mp.set_draw_target(draw_target);
         let store = FsStore::load(&blobs_data_dir2).await?;
-        let blobs = BlobsProtocol::new(
-            &store,
-            Some(EventSender::new(
-                progress_tx,
-                EventMask {
-                    connected: ConnectMode::Notify,
-                    get: provider::events::RequestMode::NotifyLog,
-                    ..EventMask::DEFAULT
-                },
-            )),
+
+        let event_sender = EventSender::new(
+            progress_tx,
+            EventMask {
+                connected: ConnectMode::Notify,
+                get: provider::events::RequestMode::NotifyLog,
+                ..EventMask::DEFAULT
+            },
         );
 
-        let import_result = import(path2, blobs.store(), &mut mp).await?;
-        let dt = t0.elapsed();
+        if args.zstd {
+            let compression = zstd::Compression;
+            let blobs = CompressedBlobsProtocol::new(&store, event_sender, compression);
+            //Box::new(BlobsProtocol::new(&store, Some(event_sender)))
 
-        let router = iroh::protocol::Router::builder(endpoint)
-            .accept(iroh_blobs::ALPN, blobs.clone())
-            .spawn();
+            let import_result = import(path2, &blobs.store, &mut mp).await?;
+            let dt = t0.elapsed();
 
-        // wait for the endpoint to figure out its address before making a ticket
-        let ep = router.endpoint();
-        tokio::time::timeout(Duration::from_secs(30), async move {
-            if !matches!(relay_mode, RelayMode::Disabled) {
-                let _ = ep.online().await;
-            }
-        })
-        .await?;
+            let router = iroh::protocol::Router::builder(endpoint)
+                .accept(zstd::Compression::ALPN, blobs.clone())
+                .spawn();
 
-        anyhow::Ok((router, import_result, dt))
+            // wait for the endpoint to figure out its address before making a ticket
+            let ep = router.endpoint();
+            tokio::time::timeout(Duration::from_secs(30), async move {
+                if !matches!(relay_mode, RelayMode::Disabled) {
+                    let _ = ep.online().await;
+                }
+            })
+            .await?;
+
+            return anyhow::Ok((router, import_result, dt));
+        } else {
+            let blobs = BlobsProtocol::new(&store, Some(event_sender));
+
+            let import_result = import(path2, &blobs.store(), &mut mp).await?;
+            let dt = t0.elapsed();
+
+            let router = iroh::protocol::Router::builder(endpoint)
+                .accept(iroh_blobs::ALPN, blobs.clone())
+                .spawn();
+
+            // wait for the endpoint to figure out its address before making a ticket
+            let ep = router.endpoint();
+            tokio::time::timeout(Duration::from_secs(30), async move {
+                if !matches!(relay_mode, RelayMode::Disabled) {
+                    let _ = ep.online().await;
+                }
+            })
+            .await?;
+
+            return anyhow::Ok((router, import_result, dt));
+        }
     };
     let (router, (temp_tag, size, collection), dt) = select! {
         x = setup => x?,

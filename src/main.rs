@@ -55,7 +55,6 @@ use iroh_blobs::{
 use n0_future::{io, task::AbortOnDropHandle, FuturesUnordered, StreamExt};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::future::Future;
 use tokio::{select, sync::mpsc};
 use tracing::{error, trace};
 use walkdir::WalkDir;
@@ -888,7 +887,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
             (router, import_result, t0.elapsed())
         } else {
             let blobs = BlobsProtocol::new(&store, Some(event_sender));
-            let import_result = import(path2, &blobs.store(), &mut mp).await?;
+            let import_result = import(path2, blobs.store(), &mut mp).await?;
             let router = iroh::protocol::Router::builder(endpoint)
                 .accept(iroh_blobs::ALPN, blobs.clone())
                 .spawn();
@@ -904,7 +903,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         })
         .await?;
 
-        return anyhow::Ok((router, import_result, dt));
+        anyhow::Ok((router, import_result, dt))
     };
     let (router, (temp_tag, size, collection), dt) = select! {
         x = setup => x?,
@@ -1178,17 +1177,12 @@ struct ZstdConn {
 }
 
 impl GetStreamPair for ZstdConn {
-    fn open_stream_pair(
-        self,
-    ) -> impl Future<Output = io::Result<StreamPair<impl RecvStream, impl SendStream>>> + Send + 'static
-    {
-        async move {
-            let connection_id = self.connection.stable_id() as u64;
-            let (send, recv) = self.connection.open_bi().await?;
-            let send = zstd::Compression.send_stream(send, 3);
-            let recv = zstd::Compression.recv_stream(recv);
-            Ok(StreamPair::new(connection_id, recv, send))
-        }
+    async fn open_stream_pair(self) -> io::Result<StreamPair<impl RecvStream, impl SendStream>> {
+        let connection_id = self.connection.stable_id() as u64;
+        let (send, recv) = self.connection.open_bi().await?;
+        let send = zstd::Compression.send_stream(send, 3);
+        let recv = zstd::Compression.recv_stream(recv);
+        Ok(StreamPair::new(connection_id, recv, send))
     }
 }
 

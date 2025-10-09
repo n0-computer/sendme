@@ -23,7 +23,7 @@ use indicatif::{
 };
 use iroh::{
     discovery::{dns::DnsDiscovery, pkarr::PkarrPublisher},
-    Endpoint, NodeAddr, RelayMode, RelayUrl, SecretKey, Watcher,
+    Endpoint, NodeAddr, RelayMode, RelayUrl, SecretKey,
 };
 use iroh_blobs::{
     api::{
@@ -284,7 +284,7 @@ fn get_or_create_secret(print: bool) -> anyhow::Result<SecretKey> {
     match std::env::var("IROH_SECRET") {
         Ok(secret) => SecretKey::from_str(&secret).context("invalid secret"),
         Err(_) => {
-            let key = SecretKey::generate(rand::rngs::OsRng);
+            let key = SecretKey::generate(&mut rand::rng());
             if print {
                 let key = hex::encode(key.to_bytes());
                 eprintln!("using secret key {key}");
@@ -448,7 +448,7 @@ async fn import(
     // we must also keep the tags around so the data does not get gced.
     let (collection, tags) = names_and_tags
         .into_iter()
-        .map(|(name, tag, _)| ((name, *tag.hash()), tag))
+        .map(|(name, tag, _)| ((name, tag.hash()), tag))
         .unzip::<_, _, Collection, Vec<_>>();
     let temp_tag = collection.clone().store(db).await?;
     // now that the collection is stored, we can drop the tags
@@ -592,7 +592,7 @@ async fn show_provide_progress(
                 trace!("got event {item:?}");
                 match item {
                     ProviderMessage::ClientConnectedNotify(msg) => {
-                        let node_id = msg.node_id.map(|id| id.fmt_short()).unwrap_or_else(|| "?".to_string());
+                        let node_id = msg.node_id.map(|id| id.fmt_short().to_string()).unwrap_or_else(|| "?".to_string());
                         let connection_id = msg.connection_id;
                         connections.lock().unwrap().insert(
                             connection_id,
@@ -650,7 +650,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     }
 
     // use a flat store - todo: use a partial in mem store instead
-    let suffix = rand::thread_rng().r#gen::<[u8; 16]>();
+    let suffix = rand::rng().random::<[u8; 16]>();
     let cwd = std::env::current_dir()?;
     let blobs_data_dir = cwd.join(format!(".sendme-send-{}", HEXLOWER.encode(&suffix)));
     if blobs_data_dir.exists() {
@@ -691,7 +691,6 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         let store = FsStore::load(&blobs_data_dir2).await?;
         let blobs = BlobsProtocol::new(
             &store,
-            endpoint.clone(),
             Some(EventSender::new(
                 progress_tx,
                 EventMask {
@@ -712,11 +711,8 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         // wait for the endpoint to figure out its address before making a ticket
         let ep = router.endpoint();
         tokio::time::timeout(Duration::from_secs(30), async move {
-            if matches!(relay_mode, RelayMode::Disabled) {
-                // no relay will arrive, as we disabled it, so wait for general init
-                let _ = ep.node_addr().initialized().await;
-            } else {
-                let _ = ep.home_relay().initialized().await;
+            if !matches!(relay_mode, RelayMode::Disabled) {
+                let _ = ep.online().await;
             }
         })
         .await?;
@@ -729,10 +725,10 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
             std::process::exit(130);
         }
     };
-    let hash = *temp_tag.hash();
+    let hash = temp_tag.hash();
 
     // make a ticket
-    let mut addr = router.endpoint().node_addr().initialized().await;
+    let mut addr = router.endpoint().node_addr();
     apply_options(&mut addr, args.ticket_type);
     let ticket = BlobTicket::new(addr, hash, BlobFormat::HashSeq);
     let entry_type = if path.is_file() { "file" } else { "directory" };
@@ -960,17 +956,28 @@ pub async fn show_download_progress(
 
 fn show_get_error(e: GetError) -> GetError {
     match &e {
-        GetError::NotFound { .. } => {
-            eprintln!("{}", style("send side no longer has a file").yellow())
-        }
-        GetError::RemoteReset { .. } => eprintln!("{}", style("remote reset").yellow()),
-        GetError::NoncompliantNode { .. } => {
-            eprintln!("{}", style("non-compliant remote").yellow())
-        }
-        GetError::Io { source, .. } => eprintln!(
+        GetError::InitialNext { source, .. } => eprintln!(
             "{}",
-            style(format!("generic network error: {source}")).yellow()
+            style(format!("initial connection error: {source}")).yellow()
         ),
+
+        GetError::ConnectedNext { source, .. } => {
+            eprintln!("{}", style(format!("connected error: {source}")).yellow())
+        }
+        GetError::AtBlobHeaderNext { source, .. } => eprintln!(
+            "{}",
+            style(format!("reading blob header error: {source}")).yellow()
+        ),
+        GetError::Decode { source, .. } => {
+            eprintln!("{}", style(format!("decoding error: {source}")).yellow())
+        }
+        GetError::IrpcSend { source, .. } => eprintln!(
+            "{}",
+            style(format!("error sending over irpc: {source}")).yellow()
+        ),
+        GetError::AtClosingNext { source, .. } => {
+            eprintln!("{}", style(format!("error at closing: {source}")).yellow())
+        }
         GetError::BadRequest { .. } => eprintln!("{}", style("bad request").yellow()),
         GetError::LocalFailure { source, .. } => {
             eprintln!("{} {source:?}", style("local failure").yellow())

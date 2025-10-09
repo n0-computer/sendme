@@ -21,38 +21,54 @@ use futures_buffered::BufferedStreamExt;
 use indicatif::{
     HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
 };
+
 #[cfg(feature = "zstd")]
 use iroh::endpoint::ConnectOptions;
+
 use iroh::{
     discovery::{dns::DnsDiscovery, pkarr::PkarrPublisher},
     Endpoint, NodeAddr, RelayMode, RelayUrl, SecretKey,
 };
+
+#[cfg(feature = "zstd")]
 use iroh::{endpoint::Connection, protocol::ProtocolHandler};
+
 use iroh_blobs::{
     api::{
         blobs::{
             AddPathOptions, AddProgressItem, ExportMode, ExportOptions, ExportProgressItem,
             ImportMode,
         },
-        remote::{GetProgressItem, GetStreamPair},
+        remote::GetProgressItem,
         Store, TempTag,
     },
     format::collection::Collection,
-    get::{request::get_hash_seq_and_sizes, GetError, Stats, StreamPair},
+    get::{request::get_hash_seq_and_sizes, GetError, Stats},
     provider::{
         self,
-        events::{
-            ClientConnected, ConnectMode, EventMask, EventSender, HasErrorCode, ProviderMessage,
-            RequestUpdate,
-        },
-        handle_stream,
+        events::{ConnectMode, EventMask, EventSender, ProviderMessage, RequestUpdate},
     },
     store::fs::FsStore,
     ticket::BlobTicket,
-    util::{RecvStream, SendStream},
     BlobFormat, BlobsProtocol, Hash,
 };
-use n0_future::{io, task::AbortOnDropHandle, FuturesUnordered, StreamExt};
+
+#[cfg(feature = "zstd")]
+use iroh_blobs::{
+    api::remote::GetStreamPair,
+    get::StreamPair,
+    provider::{
+        events::{ClientConnected, HasErrorCode},
+        handle_stream,
+    },
+    util::{RecvStream, SendStream},
+};
+
+use n0_future::{task::AbortOnDropHandle, FuturesUnordered, StreamExt};
+
+#[cfg(feature = "zstd")]
+use n0_future::io;
+
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tokio::{select, sync::mpsc};
@@ -320,6 +336,7 @@ fn validate_path_component(component: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "zstd")]
 trait Compression: Clone + Send + Sync + Debug + 'static {
     const ALPN: &'static [u8];
     fn recv_stream(
@@ -333,6 +350,7 @@ trait Compression: Clone + Send + Sync + Debug + 'static {
     ) -> impl iroh_blobs::util::SendStream + Sync + 'static;
 }
 
+#[cfg(feature = "zstd")]
 mod zstd {
     use std::io;
 
@@ -421,6 +439,7 @@ mod zstd {
     }
 }
 
+#[cfg(feature = "zstd")]
 #[derive(Debug, Clone)]
 struct CompressedBlobsProtocol<C: Compression> {
     store: Store,
@@ -429,6 +448,7 @@ struct CompressedBlobsProtocol<C: Compression> {
     compression_level: u8,
 }
 
+#[cfg(feature = "zstd")]
 impl<C: Compression> CompressedBlobsProtocol<C> {
     fn new(store: &Store, events: EventSender, compression: C, compression_level: u8) -> Self {
         Self {
@@ -440,6 +460,7 @@ impl<C: Compression> CompressedBlobsProtocol<C> {
     }
 }
 
+#[cfg(feature = "zstd")]
 impl<C: Compression> ProtocolHandler for CompressedBlobsProtocol<C> {
     async fn accept(
         &self,
@@ -801,10 +822,21 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         eprintln!("using secret key {secret_key}");
     }
     // create a magicsocket endpoint
-    let alpn: Vec<u8> = if args.zstd {
-        zstd::Compression::ALPN.to_vec()
-    } else {
-        iroh_blobs::protocol::ALPN.to_vec()
+    let alpn: Vec<u8> = {
+        #[cfg(feature = "zstd")]
+        {
+            if args.zstd {
+                zstd::Compression::ALPN.to_vec()
+            } else {
+                iroh_blobs::protocol::ALPN.to_vec()
+            }
+        }
+
+        #[cfg(not(feature = "zstd"))]
+        {
+            // When the feature isn't enabled, we just fall back
+            iroh_blobs::protocol::ALPN.to_vec()
+        }
     };
 
     let relay_mode: RelayMode = args.common.relay.into();
@@ -872,26 +904,41 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
             },
         );
 
-        let (router, import_result, dt) = if args.zstd {
-            let compression = zstd::Compression;
-            let blobs = CompressedBlobsProtocol::new(
-                &store,
-                event_sender,
-                compression,
-                args.compression_quality,
-            );
-            let import_result = import(path2, &blobs.store, &mut mp).await?;
-            let router = iroh::protocol::Router::builder(endpoint)
-                .accept(zstd::Compression::ALPN, blobs.clone())
-                .spawn();
-            (router, import_result, t0.elapsed())
-        } else {
-            let blobs = BlobsProtocol::new(&store, Some(event_sender));
-            let import_result = import(path2, blobs.store(), &mut mp).await?;
-            let router = iroh::protocol::Router::builder(endpoint)
-                .accept(iroh_blobs::ALPN, blobs.clone())
-                .spawn();
-            (router, import_result, t0.elapsed())
+        let (router, import_result, dt) = {
+            #[cfg(feature = "zstd")]
+            {
+                if args.zstd {
+                    let compression = zstd::Compression;
+                    let blobs = CompressedBlobsProtocol::new(
+                        &store,
+                        event_sender,
+                        compression,
+                        args.compression_quality,
+                    );
+                    let import_result = import(path2, &blobs.store, &mut mp).await?;
+                    let router = iroh::protocol::Router::builder(endpoint)
+                        .accept(zstd::Compression::ALPN, blobs.clone())
+                        .spawn();
+                    (router, import_result, t0.elapsed())
+                } else {
+                    let blobs = BlobsProtocol::new(&store, Some(event_sender));
+                    let import_result = import(path2, blobs.store(), &mut mp).await?;
+                    let router = iroh::protocol::Router::builder(endpoint)
+                        .accept(iroh_blobs::ALPN, blobs.clone())
+                        .spawn();
+                    (router, import_result, t0.elapsed())
+                }
+            }
+
+            #[cfg(not(feature = "zstd"))]
+            {
+                let blobs = BlobsProtocol::new(&store, Some(event_sender));
+                let import_result = import(path2, blobs.store(), &mut mp).await?;
+                let router = iroh::protocol::Router::builder(endpoint)
+                    .accept(iroh_blobs::ALPN, blobs.clone())
+                    .spawn();
+                (router, import_result, t0.elapsed())
+            }
         };
 
         // wait for the endpoint to figure out its address before making a ticket
@@ -1172,10 +1219,12 @@ fn show_get_error(e: GetError) -> GetError {
     e
 }
 
+#[cfg(feature = "zstd")]
 struct ZstdConn {
     connection: Connection,
 }
 
+#[cfg(feature = "zstd")]
 impl GetStreamPair for ZstdConn {
     async fn open_stream_pair(self) -> io::Result<StreamPair<impl RecvStream, impl SendStream>> {
         let connection_id = self.connection.stable_id() as u64;
@@ -1237,8 +1286,13 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
             let mut connecting = endpoint
                 .connect_with_opts(addr, iroh_blobs::ALPN, options)
                 .await?;
+
             let using_zstd: bool = match connecting.alpn().await {
+                #[cfg(feature = "zstd")]
                 Ok(alpn_vec) => alpn_vec == zstd::Compression::ALPN.to_vec(),
+                #[cfg(not(feature = "zstd"))]
+                Ok(_) => false,
+
                 Err(e) => {
                     anyhow::bail!(
                         "This build of sendme does not support receiving with compression: {}",
@@ -1284,12 +1338,18 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
 
             let (tx, rx) = mpsc::channel(32);
             let local_size = local.local_bytes();
+
+            #[cfg(feature = "zstd")]
             let get = if using_zstd {
                 let zstd_conn = ZstdConn { connection };
                 db.remote().execute_get(zstd_conn, local.missing())
             } else {
                 db.remote().execute_get(connection, local.missing())
             };
+
+            #[cfg(not(feature = "zstd"))]
+            let get = db.remote().execute_get(connection, local.missing());
+
             let task = tokio::spawn(show_download_progress(
                 mp.clone(),
                 rx,

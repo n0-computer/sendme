@@ -1331,7 +1331,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
                         HumanBytes(total_size)
                     );
                 }
-                (total_files, payload_size, total_files)
+                (total_size, payload_size, total_files)
             } else {
                 (0, 0, 0)
             };

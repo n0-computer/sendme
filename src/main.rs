@@ -2,7 +2,7 @@
 
 use std::{
     collections::BTreeMap,
-    fmt::{Display, Formatter},
+    fmt::{Debug, Display, Formatter},
     net::{SocketAddrV4, SocketAddrV6},
     path::{Component, Path, PathBuf},
     str::FromStr,
@@ -21,10 +21,18 @@ use futures_buffered::BufferedStreamExt;
 use indicatif::{
     HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
 };
+
+#[cfg(feature = "zstd")]
+use iroh::endpoint::ConnectOptions;
+
 use iroh::{
     discovery::{dns::DnsDiscovery, pkarr::PkarrPublisher},
     Endpoint, NodeAddr, RelayMode, RelayUrl, SecretKey,
 };
+
+#[cfg(feature = "zstd")]
+use iroh::{endpoint::Connection, protocol::ProtocolHandler};
+
 use iroh_blobs::{
     api::{
         blobs::{
@@ -44,7 +52,23 @@ use iroh_blobs::{
     ticket::BlobTicket,
     BlobFormat, BlobsProtocol, Hash,
 };
+
+#[cfg(feature = "zstd")]
+use iroh_blobs::{
+    api::remote::GetStreamPair,
+    get::StreamPair,
+    provider::{
+        events::{ClientConnected, HasErrorCode},
+        handle_stream,
+    },
+    util::{RecvStream, SendStream},
+};
+
 use n0_future::{task::AbortOnDropHandle, FuturesUnordered, StreamExt};
+
+#[cfg(feature = "zstd")]
+use n0_future::io;
+
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tokio::{select, sync::mpsc};
@@ -175,7 +199,7 @@ impl Display for RelayModeOption {
         match self {
             Self::Disabled => f.write_str("disabled"),
             Self::Default => f.write_str("default"),
-            Self::Custom(url) => url.fmt(f),
+            Self::Custom(url) => std::fmt::Display::fmt(&url, f),
         }
     }
 }
@@ -221,6 +245,16 @@ pub struct SendArgs {
     #[cfg(feature = "clipboard")]
     #[clap(short = 'c', long)]
     pub clipboard: bool,
+
+    /// Use zstd to compress outgoing and decompress incoming data
+    #[cfg(feature = "zstd")]
+    #[clap(short = 'z', long)]
+    pub zstd: bool,
+
+    /// Compression level for zstd
+    #[cfg(feature = "zstd")]
+    #[clap(short = 'q', long, default_value_t = 3, requires("zstd"))]
+    pub compression_quality: u8,
 }
 
 #[derive(Parser, Debug)]
@@ -300,6 +334,160 @@ fn validate_path_component(component: &str) -> anyhow::Result<()> {
         "path components must not contain the only correct path separator, /"
     );
     Ok(())
+}
+
+#[cfg(feature = "zstd")]
+trait Compression: Clone + Send + Sync + Debug + 'static {
+    const ALPN: &'static [u8];
+    fn recv_stream(
+        &self,
+        stream: iroh::endpoint::RecvStream,
+    ) -> impl iroh_blobs::util::RecvStream + Sync + 'static;
+    fn send_stream(
+        &self,
+        stream: iroh::endpoint::SendStream,
+        compression_level: u8,
+    ) -> impl iroh_blobs::util::SendStream + Sync + 'static;
+}
+
+#[cfg(feature = "zstd")]
+mod zstd {
+    use std::io;
+
+    use async_compression::tokio::{bufread::ZstdDecoder, write::ZstdEncoder};
+    use async_compression::Level;
+    use iroh::endpoint::VarInt;
+    use iroh_blobs::util::{
+        AsyncReadRecvStream, AsyncReadRecvStreamExtra, AsyncWriteSendStream,
+        AsyncWriteSendStreamExtra,
+    };
+    use tokio::io::{AsyncRead, AsyncWrite, BufReader};
+
+    struct SendStream(ZstdEncoder<iroh::endpoint::SendStream>);
+
+    impl SendStream {
+        pub fn new(
+            inner: iroh::endpoint::SendStream,
+            compression_level: u8,
+        ) -> AsyncWriteSendStream<Self> {
+            let c_level = compression_level.clamp(1, 22);
+            AsyncWriteSendStream::new(Self(ZstdEncoder::with_quality(
+                inner,
+                Level::Precise(c_level as _),
+            )))
+        }
+    }
+
+    impl AsyncWriteSendStreamExtra for SendStream {
+        fn inner(&mut self) -> &mut (impl AsyncWrite + Unpin + Send) {
+            &mut self.0
+        }
+
+        fn reset(&mut self, code: VarInt) -> io::Result<()> {
+            Ok(self.0.get_mut().reset(code)?)
+        }
+
+        async fn stopped(&mut self) -> io::Result<Option<VarInt>> {
+            Ok(self.0.get_mut().stopped().await?)
+        }
+
+        fn id(&self) -> u64 {
+            self.0.get_ref().id().index()
+        }
+    }
+
+    struct RecvStream(ZstdDecoder<BufReader<iroh::endpoint::RecvStream>>);
+
+    impl RecvStream {
+        pub fn new(inner: iroh::endpoint::RecvStream) -> AsyncReadRecvStream<Self> {
+            AsyncReadRecvStream::new(Self(ZstdDecoder::new(BufReader::new(inner))))
+        }
+    }
+
+    impl AsyncReadRecvStreamExtra for RecvStream {
+        fn inner(&mut self) -> &mut (impl AsyncRead + Unpin + Send) {
+            &mut self.0
+        }
+
+        fn stop(&mut self, code: VarInt) -> io::Result<()> {
+            Ok(self.0.get_mut().get_mut().stop(code)?)
+        }
+
+        fn id(&self) -> u64 {
+            self.0.get_ref().get_ref().id().index()
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct Compression;
+
+    impl super::Compression for Compression {
+        const ALPN: &[u8] = concat_const::concat_bytes!(b"zstd/", iroh_blobs::ALPN);
+        fn recv_stream(
+            &self,
+            stream: iroh::endpoint::RecvStream,
+        ) -> impl iroh_blobs::util::RecvStream + Sync + 'static {
+            RecvStream::new(stream)
+        }
+        fn send_stream(
+            &self,
+            stream: iroh::endpoint::SendStream,
+            compression_level: u8,
+        ) -> impl iroh_blobs::util::SendStream + Sync + 'static {
+            SendStream::new(stream, compression_level)
+        }
+    }
+}
+
+#[cfg(feature = "zstd")]
+#[derive(Debug, Clone)]
+struct CompressedBlobsProtocol<C: Compression> {
+    store: Store,
+    events: EventSender,
+    compression: C,
+    compression_level: u8,
+}
+
+#[cfg(feature = "zstd")]
+impl<C: Compression> CompressedBlobsProtocol<C> {
+    fn new(store: &Store, events: EventSender, compression: C, compression_level: u8) -> Self {
+        Self {
+            store: store.clone(),
+            events,
+            compression,
+            compression_level,
+        }
+    }
+}
+
+#[cfg(feature = "zstd")]
+impl<C: Compression> ProtocolHandler for CompressedBlobsProtocol<C> {
+    async fn accept(
+        &self,
+        connection: iroh::endpoint::Connection,
+    ) -> std::result::Result<(), iroh::protocol::AcceptError> {
+        let connection_id = connection.stable_id() as u64;
+        if let Err(cause) = self
+            .events
+            .client_connected(|| ClientConnected {
+                connection_id,
+                node_id: connection.remote_node_id().ok(),
+            })
+            .await
+        {
+            connection.close(cause.code(), cause.reason());
+            // debug!("closing connection: {cause}");
+            return Ok(());
+        }
+        while let Ok((send, recv)) = connection.accept_bi().await {
+            let send = self.compression.send_stream(send, self.compression_level);
+            let recv = self.compression.recv_stream(recv);
+            let store = self.store.clone();
+            let pair = provider::StreamPair::new(connection_id, recv, send, self.events.clone());
+            tokio::spawn(handle_stream(pair, store));
+        }
+        Ok(())
+    }
 }
 
 /// This function converts an already canonicalized path to a string.
@@ -634,9 +822,26 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         eprintln!("using secret key {secret_key}");
     }
     // create a magicsocket endpoint
+    let alpn: Vec<u8> = {
+        #[cfg(feature = "zstd")]
+        {
+            if args.zstd {
+                zstd::Compression::ALPN.to_vec()
+            } else {
+                iroh_blobs::protocol::ALPN.to_vec()
+            }
+        }
+
+        #[cfg(not(feature = "zstd"))]
+        {
+            // When the feature isn't enabled, we just fall back
+            iroh_blobs::protocol::ALPN.to_vec()
+        }
+    };
+
     let relay_mode: RelayMode = args.common.relay.into();
     let mut builder = Endpoint::builder()
-        .alpns(vec![iroh_blobs::protocol::ALPN.to_vec()])
+        .alpns(vec![alpn])
         .secret_key(secret_key)
         .relay_mode(relay_mode.clone());
     if args.ticket_type == AddrInfoOptions::Id {
@@ -689,24 +894,52 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         };
         mp.set_draw_target(draw_target);
         let store = FsStore::load(&blobs_data_dir2).await?;
-        let blobs = BlobsProtocol::new(
-            &store,
-            Some(EventSender::new(
-                progress_tx,
-                EventMask {
-                    connected: ConnectMode::Notify,
-                    get: provider::events::RequestMode::NotifyLog,
-                    ..EventMask::DEFAULT
-                },
-            )),
+
+        let event_sender = EventSender::new(
+            progress_tx,
+            EventMask {
+                connected: ConnectMode::Notify,
+                get: provider::events::RequestMode::NotifyLog,
+                ..EventMask::DEFAULT
+            },
         );
 
-        let import_result = import(path2, blobs.store(), &mut mp).await?;
-        let dt = t0.elapsed();
+        let (router, import_result, dt) = {
+            #[cfg(feature = "zstd")]
+            {
+                if args.zstd {
+                    let compression = zstd::Compression;
+                    let blobs = CompressedBlobsProtocol::new(
+                        &store,
+                        event_sender,
+                        compression,
+                        args.compression_quality,
+                    );
+                    let import_result = import(path2, &blobs.store, &mut mp).await?;
+                    let router = iroh::protocol::Router::builder(endpoint)
+                        .accept(zstd::Compression::ALPN, blobs.clone())
+                        .spawn();
+                    (router, import_result, t0.elapsed())
+                } else {
+                    let blobs = BlobsProtocol::new(&store, Some(event_sender));
+                    let import_result = import(path2, blobs.store(), &mut mp).await?;
+                    let router = iroh::protocol::Router::builder(endpoint)
+                        .accept(iroh_blobs::ALPN, blobs.clone())
+                        .spawn();
+                    (router, import_result, t0.elapsed())
+                }
+            }
 
-        let router = iroh::protocol::Router::builder(endpoint)
-            .accept(iroh_blobs::ALPN, blobs.clone())
-            .spawn();
+            #[cfg(not(feature = "zstd"))]
+            {
+                let blobs = BlobsProtocol::new(&store, Some(event_sender));
+                let import_result = import(path2, blobs.store(), &mut mp).await?;
+                let router = iroh::protocol::Router::builder(endpoint)
+                    .accept(iroh_blobs::ALPN, blobs.clone())
+                    .spawn();
+                (router, import_result, t0.elapsed())
+            }
+        };
 
         // wait for the endpoint to figure out its address before making a ticket
         let ep = router.endpoint();
@@ -986,6 +1219,22 @@ fn show_get_error(e: GetError) -> GetError {
     e
 }
 
+#[cfg(feature = "zstd")]
+struct ZstdConn {
+    connection: Connection,
+}
+
+#[cfg(feature = "zstd")]
+impl GetStreamPair for ZstdConn {
+    async fn open_stream_pair(self) -> io::Result<StreamPair<impl RecvStream, impl SendStream>> {
+        let connection_id = self.connection.stable_id() as u64;
+        let (send, recv) = self.connection.open_bi().await?;
+        let send = zstd::Compression.send_stream(send, 3);
+        let recv = zstd::Compression.recv_stream(recv);
+        Ok(StreamPair::new(connection_id, recv, send))
+    }
+}
+
 async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     let ticket = args.ticket;
     let addr = ticket.node_addr().clone();
@@ -1026,34 +1275,81 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
         let (stats, total_files, payload_size) = if !local.is_complete() {
             trace!("{} not complete", hash_and_format.hash);
             let cp = mp.add(make_connect_progress());
-            let connection = endpoint.connect(addr, iroh_blobs::protocol::ALPN).await?;
-            cp.finish_and_clear();
-            let sp = mp.add(make_get_sizes_progress());
-            let (_hash_seq, sizes) =
-                get_hash_seq_and_sizes(&connection, &hash_and_format.hash, 1024 * 1024 * 32, None)
-                    .await
-                    .map_err(show_get_error)?;
-            sp.finish_and_clear();
-            let total_size = sizes.iter().copied().sum::<u64>();
-            let payload_size = sizes.iter().skip(2).copied().sum::<u64>();
-            let total_files = (sizes.len().saturating_sub(1)) as u64;
-            eprintln!(
-                "getting collection {} {} files, {}",
-                print_hash(&ticket.hash(), args.common.format),
-                total_files,
-                HumanBytes(payload_size)
-            );
-            // print the details of the collection only in verbose mode
-            if args.common.verbose > 0 {
+
+            #[cfg(feature = "zstd")]
+            let options =
+                ConnectOptions::new().with_additional_alpns(vec![zstd::Compression::ALPN.to_vec()]);
+
+            #[cfg(not(feature = "zstd"))]
+            let options = Default::default();
+
+            let mut connecting = endpoint
+                .connect_with_opts(addr, iroh_blobs::ALPN, options)
+                .await?;
+
+            let using_zstd: bool = match connecting.alpn().await {
+                #[cfg(feature = "zstd")]
+                Ok(alpn_vec) => alpn_vec == zstd::Compression::ALPN.to_vec(),
+                #[cfg(not(feature = "zstd"))]
+                Ok(_) => false,
+
+                Err(e) => {
+                    anyhow::bail!(
+                        "This build of sendme does not support receiving with compression: {}",
+                        e
+                    );
+                }
+            };
+
+            let connection = connecting.await?;
+            let (total_size, payload_size, total_files) = if !using_zstd {
+                cp.finish_and_clear();
+                let sp = mp.add(make_get_sizes_progress());
+                let (_hash_seq, sizes) = get_hash_seq_and_sizes(
+                    &connection,
+                    &hash_and_format.hash,
+                    1024 * 1024 * 32,
+                    None,
+                )
+                .await
+                .map_err(show_get_error)?;
+                sp.finish_and_clear();
+                let total_size = sizes.iter().copied().sum::<u64>();
+                let payload_size = sizes.iter().skip(2).copied().sum::<u64>();
+                let total_files = (sizes.len().saturating_sub(1)) as u64;
                 eprintln!(
-                    "getting {} blobs in total, {}",
-                    total_files + 1,
-                    HumanBytes(total_size)
+                    "getting collection {} {} files, {}",
+                    print_hash(&ticket.hash(), args.common.format),
+                    total_files,
+                    HumanBytes(payload_size)
                 );
-            }
+                // print the details of the collection only in verbose mode
+                if args.common.verbose > 0 {
+                    eprintln!(
+                        "getting {} blobs in total, {}",
+                        total_files + 1,
+                        HumanBytes(total_size)
+                    );
+                }
+                (total_size, payload_size, total_files)
+            } else {
+                (0, 0, 0)
+            };
+
             let (tx, rx) = mpsc::channel(32);
             let local_size = local.local_bytes();
+
+            #[cfg(feature = "zstd")]
+            let get = if using_zstd {
+                let zstd_conn = ZstdConn { connection };
+                db.remote().execute_get(zstd_conn, local.missing())
+            } else {
+                db.remote().execute_get(connection, local.missing())
+            };
+
+            #[cfg(not(feature = "zstd"))]
             let get = db.remote().execute_get(connection, local.missing());
+
             let task = tokio::spawn(show_download_progress(
                 mp.clone(),
                 rx,

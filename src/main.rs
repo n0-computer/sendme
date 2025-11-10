@@ -145,6 +145,12 @@ pub struct CommonArgs {
 
     #[clap(long)]
     pub show_secret: bool,
+
+    /// Number of parallel jobs to use while importing files.
+    ///
+    /// Defaults to the number of logical CPU cores.
+    #[clap(short = 'j', long)]
+    pub jobs: Option<usize>,
 }
 
 /// Available command line options for configuring relays.
@@ -367,8 +373,9 @@ async fn import(
     path: PathBuf,
     db: &Store,
     mp: &mut MultiProgress,
+    jobs: Option<usize>,
 ) -> anyhow::Result<(TempTag, u64, Collection)> {
-    let parallelism = num_cpus::get();
+    let parallelism = jobs.unwrap_or_else(num_cpus::get);
     let path = path.canonicalize()?;
     anyhow::ensure!(path.exists(), "path {} does not exist", path.display());
     let root = path.parent().context("context get parent")?;
@@ -711,7 +718,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
             )),
         );
 
-        let import_result = import(path2, blobs.store(), &mut mp).await?;
+        let import_result = import(path2, blobs.store(), &mut mp, args.common.jobs).await?;
         let dt = t0.elapsed();
 
         let router = iroh::protocol::Router::builder(endpoint)

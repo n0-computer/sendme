@@ -653,10 +653,10 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         builder = builder.discovery(PkarrPublisher::n0_dns());
     }
     if let Some(addr) = args.common.magic_ipv4_addr {
-        builder = builder.bind_addr_v4(addr);
+        builder = builder.bind_addr(addr)?;
     }
     if let Some(addr) = args.common.magic_ipv6_addr {
-        builder = builder.bind_addr_v6(addr);
+        builder = builder.bind_addr(addr)?;
     }
 
     // use a flat store - todo: use a partial in mem store instead
@@ -1009,10 +1009,10 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
         builder = builder.discovery(DnsDiscovery::n0_dns());
     }
     if let Some(addr) = args.common.magic_ipv4_addr {
-        builder = builder.bind_addr_v4(addr);
+        builder = builder.bind_addr(addr)?;
     }
     if let Some(addr) = args.common.magic_ipv6_addr {
-        builder = builder.bind_addr_v6(addr);
+        builder = builder.bind_addr(addr)?;
     }
     let endpoint = builder.bind().await?;
     let dir_name = format!(".sendme-recv-{}", ticket.hash().to_hex());

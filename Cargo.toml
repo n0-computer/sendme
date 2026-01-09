@@ -68,8 +68,6 @@ debug = "none"
 strip = true
 
 [patch.crates-io]
-iroh = { git = "https://github.com/n0-computer/iroh", branch = "feat-multipath" }
+iroh = { git = "https://github.com/n0-computer/iroh", branch = "release-0-96" }
 irpc = { git = "https://github.com/n0-computer/irpc", branch = "feat-multipath" }
 iroh-blobs = { git = "https://github.com/n0-computer/iroh-blobs", branch = "feat-multipath" }
-iroh-quinn = { git = "https://github.com/n0-computer/quinn", branch = "main-iroh" }
-iroh-quinn-udp = { git = "https://github.com/n0-computer/quinn", branch = "main-iroh" }

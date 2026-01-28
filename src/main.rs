@@ -206,7 +206,7 @@ pub struct SendArgs {
     /// to use the biggest type of ticket that includes both relay and
     /// address information.
     ///
-    /// Generally, the more information the higher the likelyhood of
+    /// Generally, the more information the higher the likelihood of
     /// a successful connection, but also the bigger a ticket to connect.
     ///
     /// This is most useful for debugging which methods of connection

@@ -23,6 +23,7 @@ use indicatif::{
 };
 use iroh::{
     address_lookup::{dns::DnsAddressLookup, pkarr::PkarrPublisher},
+    endpoint::presets,
     Endpoint, EndpointAddr, RelayMode, RelayUrl, SecretKey, TransportAddr,
 };
 use iroh_blobs::{
@@ -645,7 +646,7 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     }
     // create a magicsocket endpoint
     let relay_mode: RelayMode = args.common.relay.into();
-    let mut builder = Endpoint::builder()
+    let mut builder = Endpoint::builder(presets::N0)
         .alpns(vec![iroh_blobs::protocol::ALPN.to_vec()])
         .secret_key(secret_key)
         .relay_mode(relay_mode.clone());
@@ -1000,7 +1001,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     let ticket = args.ticket;
     let addr = ticket.addr().clone();
     let secret_key = get_or_create_secret(args.common.verbose > 0)?;
-    let mut builder = Endpoint::builder()
+    let mut builder = Endpoint::builder(presets::N0)
         .alpns(vec![])
         .secret_key(secret_key)
         .relay_mode(args.common.relay.into());

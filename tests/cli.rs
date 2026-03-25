@@ -79,6 +79,48 @@ fn send_recv_file() {
 }
 
 #[test]
+fn receive_closes_endpoint_no_iroh_socket_error() {
+    let name = "graceful-close.bin";
+    let data = vec![0xabu8; 64];
+    let src_dir = tempfile::tempdir().unwrap();
+    let tgt_dir = tempfile::tempdir().unwrap();
+    let src_file = src_dir.path().join(name);
+    std::fs::write(&src_file, &data).unwrap();
+    let mut send_cmd = duct::cmd(
+        sendme_bin(),
+        ["send", src_file.as_os_str().to_str().unwrap()],
+    )
+    .dir(src_dir.path())
+    .env_remove("RUST_LOG")
+    .stderr_to_stdout()
+    .reader()
+    .unwrap();
+    let output = read_ascii_lines(3, &mut send_cmd).unwrap();
+    let output = String::from_utf8(output).unwrap();
+    let ticket = output.split_ascii_whitespace().last().unwrap();
+    let ticket = BlobTicket::from_str(ticket).unwrap();
+    let receive_output = duct::cmd(sendme_bin(), ["receive", &ticket.to_string()])
+        .dir(tgt_dir.path())
+        .env("RUST_LOG", "iroh::socket=error")
+        .stdout_capture()
+        .stderr_capture()
+        .run()
+        .unwrap();
+    assert!(receive_output.status.success(), "{receive_output:?}");
+    let stderr = String::from_utf8_lossy(&receive_output.stderr);
+    assert!(
+        !stderr.contains("Endpoint dropped"),
+        "unexpected iroh shutdown log on stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Aborting ungracefully"),
+        "unexpected iroh shutdown log on stderr: {stderr}"
+    );
+    let tgt_file = tgt_dir.path().join(name);
+    assert_eq!(std::fs::read(&tgt_file).unwrap(), data);
+}
+
+#[test]
 fn send_recv_dir() {
     fn create_file(base: &Path, i: usize, j: usize, k: usize) -> (PathBuf, Vec<u8>) {
         let name = base

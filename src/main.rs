@@ -1021,7 +1021,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     let db = iroh_blobs::store::fs::FsStore::load(&iroh_data_dir).await?;
     let db2 = db.clone();
     trace!("load done!");
-    let fut = async move {
+    let fut = async {
         trace!("running");
         let mut mp: MultiProgress = MultiProgress::new();
         let draw_target = if args.common.no_progress {
@@ -1114,8 +1114,12 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     };
     let (total_files, payload_size, stats) = select! {
         x = fut => match x {
-            Ok(x) => x,
+            Ok(x) => {
+                endpoint.close().await;
+                x
+            }
             Err(e) => {
+                endpoint.close().await;
                 // make sure we shutdown the db before exiting
                 db2.shutdown().await?;
                 eprintln!("error: {e}");
@@ -1123,6 +1127,7 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
             }
         },
         _ = tokio::signal::ctrl_c() => {
+            endpoint.close().await;
             db2.shutdown().await?;
             std::process::exit(130);
         }

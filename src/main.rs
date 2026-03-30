@@ -1252,11 +1252,11 @@ async fn recover(args: RecoverArgs) -> anyhow::Result<()> {
     anyhow::ensure!(store_path.is_dir(), "store path is not a directory");
     let output = &args.output;
     anyhow::ensure!(!output.as_os_str().is_empty(), "output directory must be specified");
-    if output.exists() {
-        anyhow::ensure!(output.is_dir(), "output path exists but is not a directory");
-    } else {
+    if !output.exists() {
         tokio::fs::create_dir_all(output).await?;
     }
+    let output = output.canonicalize().context("output directory not found")?;
+    anyhow::ensure!(output.is_dir(), "output path is not a directory");
 
     let hash = parse_recv_dir_hash(&store_path)?;
     eprintln!("opening store at {}", store_path.display());
@@ -1282,7 +1282,7 @@ async fn recover(args: RecoverArgs) -> anyhow::Result<()> {
 
     let mut mp = MultiProgress::new();
     mp.set_draw_target(ProgressDrawTarget::stderr());
-    let (recovered, skipped) = export_to(&store, &collection, output, &mut mp).await?;
+    let (recovered, skipped) = export_to(&store, &collection, &output, &mut mp).await?;
     db.shutdown().await?;
     eprintln!("done: {recovered} files recovered, {skipped} skipped");
     Ok(())

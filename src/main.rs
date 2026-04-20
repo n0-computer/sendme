@@ -46,7 +46,7 @@ use iroh_blobs::{
     BlobFormat, BlobsProtocol, Hash,
 };
 use n0_future::{task::AbortOnDropHandle, FuturesUnordered, StreamExt};
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use tokio::{select, sync::mpsc};
 use tracing::{error, trace};

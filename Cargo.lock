@@ -1787,8 +1787,9 @@ dependencies = [
 
 [[package]]
 name = "iroh"
-version = "0.97.0"
-source = "git+https://github.com/n0-computer/iroh.git?branch=main#3ab6222bc27931d750329563faa673bd1363d721"
+version = "0.98.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "936882068af6037912c205ad73ae83e1ab9b81f5bd01200210c90f000e24f4d3"
 dependencies = [
  "backon",
  "blake3",
@@ -1828,7 +1829,6 @@ dependencies = [
  "serde",
  "smallvec",
  "strum",
- "sync_wrapper",
  "time",
  "tokio",
  "tokio-stream",
@@ -1841,11 +1841,13 @@ dependencies = [
 
 [[package]]
 name = "iroh-base"
-version = "0.97.0"
-source = "git+https://github.com/n0-computer/iroh.git?branch=main#3ab6222bc27931d750329563faa673bd1363d721"
+version = "0.98.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "738865784637830fb14204ebd3047922db83bc1816a59027af29579b9c27bd99"
 dependencies = [
  "curve25519-dalek",
  "data-encoding",
+ "data-encoding-macro",
  "derive_more",
  "digest",
  "ed25519-dalek",
@@ -1862,7 +1864,7 @@ dependencies = [
 [[package]]
 name = "iroh-blobs"
 version = "0.99.0"
-source = "git+https://github.com/n0-computer/iroh-blobs.git?branch=iroh-main#e402734b76400b38a2670acd0447fe04775619a7"
+source = "git+https://github.com/n0-computer/iroh-blobs.git?branch=iroh-main#2dede5fe4ae9d3b2150e2390efbb27d9930d23b4"
 dependencies = [
  "arrayvec",
  "bao-tree",
@@ -1873,6 +1875,7 @@ dependencies = [
  "derive_more",
  "futures-lite",
  "genawaiter",
+ "getrandom 0.3.4",
  "hex",
  "iroh",
  "iroh-base",
@@ -1899,11 +1902,10 @@ dependencies = [
 
 [[package]]
 name = "iroh-dns"
-version = "0.97.0"
-source = "git+https://github.com/n0-computer/iroh.git?branch=main#3ab6222bc27931d750329563faa673bd1363d721"
+version = "0.98.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca474630d1e62ddef83149db6babe6a1055d901df9054349d31b22df99811b92"
 dependencies = [
- "data-encoding",
- "data-encoding-macro",
  "derive_more",
  "iroh-base",
  "n0-error",
@@ -1955,8 +1957,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-relay"
-version = "0.97.0"
-source = "git+https://github.com/n0-computer/iroh.git?branch=main#3ab6222bc27931d750329563faa673bd1363d721"
+version = "0.98.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4aa6e9a7277bfbb439739c52b57eb5f9288030983928412022b8e94a43d4d838"
 dependencies = [
  "blake3",
  "bytes",
@@ -2000,9 +2003,9 @@ dependencies = [
 
 [[package]]
 name = "iroh-tickets"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab64bac4bb573b9cfd2142bd2876ed65ca792efbc4398361a4ee51a0f9afbed6"
+checksum = "09579438a34a147dcdce8a67cdf59bd53a197bfefe71da1a8e94df9aec0583ae"
 dependencies = [
  "data-encoding",
  "derive_more",
@@ -2015,14 +2018,14 @@ dependencies = [
 [[package]]
 name = "irpc"
 version = "0.13.0"
-source = "git+https://github.com/n0-computer/irpc.git?branch=iroh-main#fb34e50754f07daaf09b26a605671fba62d43683"
+source = "git+https://github.com/n0-computer/irpc.git?branch=iroh-main#b16630f3ea1944c77f14b75be3b71555c06dc1fa"
 dependencies = [
  "futures-buffered",
  "futures-util",
  "irpc-derive",
  "n0-error",
  "n0-future",
- "noq 0.17.0",
+ "noq 0.18.0",
  "postcard",
  "rcgen",
  "rustls",
@@ -2036,7 +2039,7 @@ dependencies = [
 [[package]]
 name = "irpc-derive"
 version = "0.10.0"
-source = "git+https://github.com/n0-computer/irpc.git?branch=iroh-main#fb34e50754f07daaf09b26a605671fba62d43683"
+source = "git+https://github.com/n0-computer/irpc.git?branch=iroh-main#b16630f3ea1944c77f14b75be3b71555c06dc1fa"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4064,9 +4067,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.52.0"
+version = "1.52.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a91135f59b1cbf38c91e73cf3386fca9bb77915c45ce2771460c9d92f0f3d776"
+checksum = "b67dee974fe86fd92cc45b7a95fdd2f99a36a6d7b0d431a231178d3d670bbcc6"
 dependencies = [
  "bytes",
  "libc",

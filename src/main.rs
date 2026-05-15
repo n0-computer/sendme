@@ -29,8 +29,8 @@ use iroh::{
 use iroh_blobs::{
     api::{
         blobs::{
-            AddPathOptions, AddProgressItem, ExportMode, ExportOptions, ExportProgressItem,
-            ImportMode,
+            AddPathOptions, AddProgressItem, BlobStatus, ExportMode, ExportOptions,
+            ExportProgressItem, ImportMode,
         },
         remote::GetProgressItem,
         Store, TempTag,
@@ -109,6 +109,12 @@ pub enum Commands {
     /// Receive a file or directory.
     #[clap(visible_alias = "recv")]
     Receive(ReceiveArgs),
+
+    /// Recover complete files from a partial download.
+    ///
+    /// When a download is interrupted, the temporary `.sendme-recv-*` directory
+    /// contains verified data that can be extracted without contacting the sender.
+    Recover(RecoverArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -237,6 +243,16 @@ pub struct ReceiveArgs {
 
     #[clap(flatten)]
     pub common: CommonArgs,
+}
+
+#[derive(Parser, Debug)]
+pub struct RecoverArgs {
+    /// Path to the `.sendme-recv-*` temporary directory from an interrupted download.
+    pub store_path: PathBuf,
+
+    /// Directory to export recovered files into. Must be specified.
+    #[clap(short, long)]
+    pub output: PathBuf,
 }
 
 /// Options to configure what is included in a [`EndpointAddr`]
@@ -1152,6 +1168,133 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Extract the hex hash from a `.sendme-recv-{hash}` directory name.
+fn parse_recv_dir_hash(path: &Path) -> anyhow::Result<Hash> {
+    let dir_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .context("invalid store path")?;
+    let hex = dir_name
+        .strip_prefix(".sendme-recv-")
+        .context("expected a .sendme-recv-<hash> directory")?;
+    let bytes = HEXLOWER
+        .decode(hex.as_bytes())
+        .context("invalid hex in directory name")?;
+    let bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("hash must be 32 bytes"))?;
+    Ok(Hash::from(bytes))
+}
+
+/// Export complete blobs from a collection to `output_dir`.
+/// Returns (recovered, skipped) counts.
+async fn export_to(
+    db: &Store,
+    collection: &Collection,
+    output_dir: &Path,
+    mp: &mut MultiProgress,
+) -> anyhow::Result<(u64, u64)> {
+    let op = mp.add(make_export_overall_progress());
+    op.set_length(collection.len() as u64);
+    let mut recovered = 0u64;
+    let mut skipped = 0u64;
+    for (i, (name, hash)) in collection.iter().enumerate() {
+        op.set_position(i as u64);
+        let status = db.blobs().status(*hash).await?;
+        match status {
+            BlobStatus::Complete { size } => {
+                let target = get_export_path(output_dir, name)?;
+                if let Some(parent) = target.parent() {
+                    tokio::fs::create_dir_all(parent).await?;
+                }
+                if target.exists() {
+                    eprintln!("skipping {name}: target already exists");
+                    skipped += 1;
+                    continue;
+                }
+                let pb = mp.add(make_export_item_progress());
+                pb.set_message(format!("recovering {name} ({})", HumanBytes(size)));
+                let mut stream = db
+                    .export_with_opts(ExportOptions {
+                        hash: *hash,
+                        target,
+                        mode: ExportMode::Copy,
+                    })
+                    .stream()
+                    .await;
+                while let Some(item) = stream.next().await {
+                    match item {
+                        ExportProgressItem::Size(size) => pb.set_length(size),
+                        ExportProgressItem::CopyProgress(offset) => pb.set_position(offset),
+                        ExportProgressItem::Done => pb.finish_and_clear(),
+                        ExportProgressItem::Error(cause) => {
+                            pb.finish_and_clear();
+                            eprintln!("error recovering {name}: {cause}");
+                            skipped += 1;
+                            continue;
+                        }
+                    }
+                }
+                recovered += 1;
+            }
+            BlobStatus::Partial { size } => {
+                eprintln!(
+                    "skipping {name}: incomplete ({} downloaded)",
+                    HumanBytes(size.unwrap_or(0))
+                );
+                skipped += 1;
+            }
+            BlobStatus::NotFound => {
+                eprintln!("skipping {name}: not found in store");
+                skipped += 1;
+            }
+        }
+    }
+    op.finish_and_clear();
+    Ok((recovered, skipped))
+}
+
+async fn recover(args: RecoverArgs) -> anyhow::Result<()> {
+    let store_path = args.store_path.canonicalize().context("store path not found")?;
+    anyhow::ensure!(store_path.is_dir(), "store path is not a directory");
+    let output = &args.output;
+    anyhow::ensure!(!output.as_os_str().is_empty(), "output directory must be specified");
+    if !output.exists() {
+        tokio::fs::create_dir_all(output).await?;
+    }
+    let output = output.canonicalize().context("output directory not found")?;
+    anyhow::ensure!(output.is_dir(), "output path is not a directory");
+
+    let hash = parse_recv_dir_hash(&store_path)?;
+    eprintln!("opening store at {}", store_path.display());
+    let db = FsStore::load(&store_path).await?;
+    let store = db.clone();
+
+    // Check if the collection metadata is available
+    let collection = match Collection::load(hash, store.as_ref()).await {
+        Ok(c) => c,
+        Err(e) => {
+            db.shutdown().await?;
+            anyhow::bail!(
+                "cannot load collection metadata (root blob incomplete): {e}"
+            );
+        }
+    };
+
+    eprintln!(
+        "collection has {} files, recovering complete ones to {}",
+        collection.len(),
+        output.display()
+    );
+
+    let mut mp = MultiProgress::new();
+    mp.set_draw_target(ProgressDrawTarget::stderr());
+    let (recovered, skipped) = export_to(&store, &collection, &output, &mut mp).await?;
+    db.shutdown().await?;
+    eprintln!("done: {recovered} files recovered, {skipped} skipped");
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
@@ -1173,6 +1316,7 @@ async fn main() -> anyhow::Result<()> {
     let res = match args.command {
         Commands::Send(args) => send(args).await,
         Commands::Receive(args) => receive(args).await,
+        Commands::Recover(args) => recover(args).await,
     };
     if let Err(e) = &res {
         eprintln!("{e}");

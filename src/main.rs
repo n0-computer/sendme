@@ -23,7 +23,7 @@ use indicatif::{
 };
 use iroh::{
     address_lookup::{dns::DnsAddressLookup, pkarr::PkarrPublisher},
-    endpoint::presets,
+    endpoint::{presets, QuicTransportConfig},
     Endpoint, EndpointAddr, RelayMode, RelayUrl, SecretKey, TransportAddr,
 };
 use iroh_blobs::{
@@ -46,6 +46,7 @@ use iroh_blobs::{
     BlobFormat, BlobsProtocol, Hash,
 };
 use n0_future::{task::AbortOnDropHandle, FuturesUnordered, StreamExt};
+use noq_proto::congestion::{Bbr3Config, ControllerFactory, CubicConfig, NewRenoConfig};
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use tokio::{select, sync::mpsc};
@@ -90,6 +91,50 @@ impl Display for Format {
         match self {
             Format::Hex => write!(f, "hex"),
             Format::Cid => write!(f, "cid"),
+        }
+    }
+}
+
+/// Available congestion controllers for the QUIC transport.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum CongestionController {
+    #[default]
+    Cubic,
+    Reno,
+    Bbr3,
+}
+
+impl FromStr for CongestionController {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "cubic" => Ok(CongestionController::Cubic),
+            "reno" | "newreno" => Ok(CongestionController::Reno),
+            "bbr3" => Ok(CongestionController::Bbr3),
+            _ => Err(anyhow::anyhow!(
+                "invalid congestion controller, use cubic, reno, or bbr3"
+            )),
+        }
+    }
+}
+
+impl Display for CongestionController {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CongestionController::Cubic => write!(f, "cubic"),
+            CongestionController::Reno => write!(f, "reno"),
+            CongestionController::Bbr3 => write!(f, "bbr3"),
+        }
+    }
+}
+
+impl CongestionController {
+    pub fn factory(&self) -> Arc<dyn ControllerFactory + Send + Sync> {
+        match self {
+            CongestionController::Cubic => Arc::new(CubicConfig::default()),
+            CongestionController::Reno => Arc::new(NewRenoConfig::default()),
+            CongestionController::Bbr3 => Arc::new(Bbr3Config::default()),
         }
     }
 }
@@ -152,6 +197,10 @@ pub struct CommonArgs {
     /// Defaults to the number of logical CPU cores.
     #[clap(short = 'j', long)]
     pub jobs: Option<usize>,
+
+    /// The QUIC congestion controller to use.
+    #[clap(long, default_value_t = CongestionController::Cubic)]
+    pub cc: CongestionController,
 }
 
 /// Available command line options for configuring relays.
@@ -653,7 +702,11 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     }
     // create a magicsocket endpoint
     let relay_mode: RelayMode = args.common.relay.into();
+    let transport_config = QuicTransportConfig::builder()
+        .congestion_controller_factory(args.common.cc.factory())
+        .build();
     let mut builder = Endpoint::builder(presets::N0)
+        .transport_config(transport_config)
         .alpns(vec![iroh_blobs::protocol::ALPN.to_vec()])
         .secret_key(secret_key)
         .relay_mode(relay_mode.clone());
@@ -1008,7 +1061,11 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     let ticket = args.ticket;
     let addr = ticket.addr().clone();
     let secret_key = get_or_create_secret(args.common.verbose > 0)?;
+    let transport_config = QuicTransportConfig::builder()
+        .congestion_controller_factory(args.common.cc.factory())
+        .build();
     let mut builder = Endpoint::builder(presets::N0)
+        .transport_config(transport_config)
         .alpns(vec![])
         .secret_key(secret_key)
         .relay_mode(args.common.relay.into());

@@ -25,6 +25,7 @@ futures-buffered = "0.2.11"
 indicatif = "0.18"
 iroh-blobs = { version = "0.102" }
 iroh = "=1.0.0-rc.1"
+noq-proto = "=1.0.0-rc.1"
 num_cpus = "1.16.0"
 rand = "0.10"
 serde = { version = "1", features = ["derive"] }
@@ -64,3 +65,8 @@ codegen-units = 1
 lto = true
 debug = "none"
 strip = true
+
+[patch.crates-io]
+noq = { git = "https://github.com/n0-computer/noq", branch = "flub/bbr3-on-packet-sent" }
+noq-udp = { git = "https://github.com/n0-computer/noq", branch = "flub/bbr3-on-packet-sent" }
+noq-proto = { git = "https://github.com/n0-computer/noq", branch = "flub/bbr3-on-packet-sent" }

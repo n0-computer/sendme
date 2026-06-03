@@ -2489,8 +2489,7 @@ dependencies = [
 [[package]]
 name = "noq"
 version = "1.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "198b99fc085a5db1f7d259edb5ede8311e59f28cdd2687920b4313613d21a73f"
+source = "git+https://github.com/n0-computer/noq?branch=flub%2Fbbr3-on-packet-sent#8c800fc1c77edaf1133c413c0ee847cf6e525dfc"
 dependencies = [
  "bytes",
  "cfg_aliases",
@@ -2511,8 +2510,7 @@ dependencies = [
 [[package]]
 name = "noq-proto"
 version = "1.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ab0ac774795ce1e42a7e61266e71f3be8110210630441169ac8dda403dd23f1"
+source = "git+https://github.com/n0-computer/noq?branch=flub%2Fbbr3-on-packet-sent#8c800fc1c77edaf1133c413c0ee847cf6e525dfc"
 dependencies = [
  "aes-gcm",
  "bytes",
@@ -2540,8 +2538,7 @@ dependencies = [
 [[package]]
 name = "noq-udp"
 version = "1.0.0-rc.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3c1520eacd33fd6b009e2e70116b05508ade51db5e0d315ff8bf6b702148c2b"
+source = "git+https://github.com/n0-computer/noq?branch=flub%2Fbbr3-on-packet-sent#8c800fc1c77edaf1133c413c0ee847cf6e525dfc"
 dependencies = [
  "cfg_aliases",
  "libc",
@@ -3497,6 +3494,7 @@ dependencies = [
  "libc",
  "n0-future",
  "nix",
+ "noq-proto",
  "num_cpus",
  "rand",
  "serde",

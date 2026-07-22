@@ -807,6 +807,13 @@ fn handle_key_press(set_clipboard: bool, ticket: BlobTicket) {
         add_to_clipboard(&ticket);
     }
 
+    // Without a terminal there are no key events to listen for, and polling
+    // the crossterm EventStream panics with "reader source not set".
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() {
+        return;
+    }
+
     let _keyboard = tokio::task::spawn(async move {
         println!("press c to copy command to clipboard, or use the --clipboard argument");
 

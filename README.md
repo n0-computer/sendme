@@ -65,6 +65,38 @@ On completion, it will delete the temp directory.
 
 All temp directories start with `.sendme-`.
 
+## Authenticated custom relay
+
+Use `--relay-token` with a custom relay that is configured with
+`access.shared_token`. Both the sender and receiver must provide the token; it
+is not embedded in the ticket.
+
+```console
+$ sendme send <file-or-directory> \
+    --relay https://relay.example.com \
+    --relay-token "$TOKEN"
+
+$ sendme receive <ticket> \
+    --relay https://relay.example.com \
+    --relay-token "$TOKEN"
+```
+
+`--relay-only` is optional and is not recommended for normal transfers. By
+default, iroh uses the relay to establish connectivity, attempts NAT traversal,
+and switches to a direct connection when possible. If a direct connection
+cannot be established, traffic continues through the relay automatically. This
+usually provides better performance and reduces relay bandwidth usage.
+
+Add `--relay-only` to both commands when testing relay forwarding, diagnosing
+connectivity, measuring relay performance, or enforcing a network policy that
+requires all traffic to pass through the relay. It disables direct IP
+transports, so all file data is carried by the relay.
+
+`--ticket-type relay` is different: it only removes direct addresses from the
+initial ticket. The endpoints can still discover direct paths after connecting
+and switch away from the relay. Use `--relay-only` when the transfer must remain
+on the relay for its entire lifetime.
+
 ## License
 
 Copyright 2026 N0, INC.

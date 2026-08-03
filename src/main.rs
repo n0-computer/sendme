@@ -24,7 +24,7 @@ use indicatif::{
 use iroh::{
     address_lookup::{dns::DnsAddressLookup, pkarr::PkarrPublisher},
     endpoint::presets,
-    Endpoint, EndpointAddr, RelayMode, RelayUrl, SecretKey, TransportAddr,
+    Endpoint, EndpointAddr, RelayMap, RelayMode, RelayUrl, SecretKey, TransportAddr,
 };
 use iroh_blobs::{
     api::{
@@ -144,6 +144,14 @@ pub struct CommonArgs {
     #[clap(long, default_value_t = RelayModeOption::Default)]
     pub relay: RelayModeOption,
 
+    /// Bearer token used to authenticate with a custom relay.
+    #[clap(long, requires = "relay")]
+    pub relay_token: Option<String>,
+
+    /// Disable direct IP transports and send all traffic through the relay.
+    #[clap(long, default_value_t = false)]
+    pub relay_only: bool,
+
     #[clap(long)]
     pub show_secret: bool,
 
@@ -193,6 +201,21 @@ impl From<RelayModeOption> for RelayMode {
             RelayModeOption::Disabled => RelayMode::Disabled,
             RelayModeOption::Default => RelayMode::Default,
             RelayModeOption::Custom(url) => RelayMode::Custom(url.into()),
+        }
+    }
+}
+
+fn relay_mode(args: &CommonArgs) -> RelayMode {
+    match &args.relay {
+        RelayModeOption::Disabled => RelayMode::Disabled,
+        RelayModeOption::Default => RelayMode::Default,
+        RelayModeOption::Custom(url) => {
+            let map = RelayMap::from(url.clone());
+            let map = match &args.relay_token {
+                Some(token) => map.with_auth_token(token.clone()),
+                None => map,
+            };
+            RelayMode::Custom(map)
         }
     }
 }
@@ -652,11 +675,14 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
         eprintln!("using secret key {secret_key}");
     }
     // create a magicsocket endpoint
-    let relay_mode: RelayMode = args.common.relay.into();
+    let relay_mode = relay_mode(&args.common);
     let mut builder = Endpoint::builder(presets::N0)
         .alpns(vec![iroh_blobs::protocol::ALPN.to_vec()])
         .secret_key(secret_key)
         .relay_mode(relay_mode.clone());
+    if args.common.relay_only {
+        builder = builder.clear_ip_transports();
+    }
     if args.ticket_type == AddrInfoOptions::Id {
         builder = builder.address_lookup(PkarrPublisher::n0_dns());
     }
@@ -1018,7 +1044,10 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
     let mut builder = Endpoint::builder(presets::N0)
         .alpns(vec![])
         .secret_key(secret_key)
-        .relay_mode(args.common.relay.into());
+        .relay_mode(relay_mode(&args.common));
+    if args.common.relay_only {
+        builder = builder.clear_ip_transports();
+    }
 
     if ticket.addr().relay_urls().next().is_none() && ticket.addr().ip_addrs().next().is_none() {
         builder = builder.address_lookup(DnsAddressLookup::n0_dns());

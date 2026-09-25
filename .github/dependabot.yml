@@ -1,0 +1,31 @@
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file#package-ecosystem
+#
+# The cooldown lets a compromised publish be noticed before we propose it. It
+# applies to version updates only -- security updates ignore it.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    groups:
+      github-actions:
+        patterns:
+          - "*"  # Group all Actions updates into a single pull request
+    cooldown:
+      default-days: 7
+    schedule:
+      interval: weekly
+      day: "thursday"
+      time: "08:00"
+      timezone: "America/New_York"
+  - package-ecosystem: cargo
+    directory: /
+    cooldown:
+      default-days: 7
+    schedule:
+      interval: weekly
+      day: "thursday"
+      time: "08:00"
+      timezone: "America/New_York"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-patch"]

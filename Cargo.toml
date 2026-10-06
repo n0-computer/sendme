@@ -23,7 +23,7 @@ derive_more = { version = "2.0.1", features = [
 ] }
 futures-buffered = "0.2.11"
 indicatif = "0.18"
-iroh-blobs = { version = "0.103" }
+iroh-blobs = { version = "0.103.1" }
 iroh = "1.0.0"
 num_cpus = "1.16.0"
 rand = "0.10"

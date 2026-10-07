@@ -33,6 +33,10 @@ on:
         description: "Upload artifacts"
         required: true
         default: "true"
+      upload_url:
+        description: "Upload URL of an existing release, when create_release is false"
+        required: false
+        default: ""
 
 env:
   BIN_NAME: sendme
@@ -49,6 +53,7 @@ jobs:
     name: create-release
     runs-on: ubuntu-latest
     outputs:
+      upload_url: ${{ steps.release.outputs.upload_url }}
       release_version: ${{ env.RELEASE_VERSION }}
     steps:
     - name: Get the release version from the tag (push)
@@ -72,18 +77,15 @@ jobs:
       with:
         persist-credentials: false
         fetch-depth: 1
-    # actions/create-release is archived. gh ships on the runner, so the
-    # release jobs need no third-party action despite holding contents: write.
     - name: Create GitHub release
       id: release
       if: github.event.inputs.create_release == 'true' || github.event_name == 'push'
+      uses: actions/create-release@0cb9c9b65d5d1901c1f53e5e66eaf4afd303e70e # v1.1.4
       env:
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        set -euo pipefail
-        if ! gh release view "$RELEASE_VERSION" >/dev/null 2>&1; then
-          gh release create "$RELEASE_VERSION" --title "$RELEASE_VERSION"
-        fi
+        GITHUB_TOKEN: ${{ github.token }}
+      with:
+        tag_name: ${{ env.RELEASE_VERSION }}
+        release_name: ${{ env.RELEASE_VERSION }}
   build-release:
     permissions:
       contents: write        # uploads the release archives
@@ -166,12 +168,11 @@ jobs:
           tar czf "$staging.tar.gz" -C "$staging" .
           echo "ASSET=$staging.tar.gz" >> "$GITHUB_ENV"
         fi
+    # gh is not installed on the self-hosted runners.
     - name: Upload release archive
       if: github.event.inputs.upload_artifacts == 'true' || github.event_name == 'push'
-      shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
-        VERSION: ${{ needs.create-release.outputs.release_version }}
-      run: |
-        set -euo pipefail
-        gh release upload "$VERSION" "$ASSET" --clobber
+      uses: n0-computer/actions-upload-release-asset@2613dacb5369f21a7e14f8eedce32ea9f88bb19f # main
+      with:
+        upload_url: ${{ github.event.inputs.upload_url || needs.create-release.outputs.upload_url }}
+        asset_path: ${{ env.ASSET }}
+        overwrite: true

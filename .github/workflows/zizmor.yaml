@@ -4,10 +4,10 @@ name: Workflow Lint
 
 on:
   pull_request:
-    paths: ['.github/workflows/**', '.github/dependabot.yml', '.pinact.yaml']
+    paths: ['.github/workflows/**', '.github/dependabot.yml', '.pinact.yaml', 'zizmor.yml']
   push:
     branches: [main]
-    paths: ['.github/workflows/**', '.github/dependabot.yml', '.pinact.yaml']
+    paths: ['.github/workflows/**', '.github/dependabot.yml', '.pinact.yaml', 'zizmor.yml']
   workflow_dispatch:
 
 permissions:

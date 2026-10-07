@@ -1,0 +1,6 @@
+rules:
+  archived-uses:
+    ignore:
+      # actions/create-release is archived but pinned to a SHA. Replacing it
+      # means reworking the upload_url handoff to the asset upload step.
+      - release.yml

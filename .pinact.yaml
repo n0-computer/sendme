@@ -3,3 +3,10 @@ version: 3
 
 min_age:
   value: 7 # days, matches the dependabot cooldown
+
+rules:
+  - ignore: true
+    conditions:
+      # n0-owned, no releases cut.
+      - expr: |
+          ActionName == "n0-computer/actions-upload-release-asset"

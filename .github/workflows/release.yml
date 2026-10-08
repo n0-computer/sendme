@@ -73,7 +73,7 @@ jobs:
         echo "RELEASE_VERSION=$INPUT_RELEASE_VERSION" >> "$GITHUB_ENV"
         echo "version is: $INPUT_RELEASE_VERSION"
     - name: Checkout repository
-      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
         fetch-depth: 1
@@ -125,12 +125,12 @@ jobs:
             runner: [windows-latest]
     steps:
     - name: Checkout repository
-      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
         fetch-depth: 1
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+      uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
       with:
         toolchain: ${{ matrix.rust }}
         targets: ${{ matrix.cargo_targets }}

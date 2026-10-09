@@ -60,7 +60,11 @@ use walkdir::WalkDir;
 /// You can also specify a port for the magicsocket. If you don't, a random one
 /// will be chosen.
 #[derive(Parser, Debug)]
-#[command(version, about)]
+#[command(
+    version,
+    about,
+    after_help = "Run `sendme <COMMAND> --help` to see all options for a command."
+)]
 pub struct Args {
     #[clap(subcommand)]
     pub command: Commands,

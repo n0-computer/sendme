@@ -1056,6 +1056,27 @@ async fn receive(args: ReceiveArgs) -> anyhow::Result<()> {
             trace!("{} not complete", hash_and_format.hash);
             let cp = mp.add(make_connect_progress());
             let connection = endpoint.connect(addr, iroh_blobs::protocol::ALPN).await?;
+            let conn = connection.clone();
+            let mp2 = mp.clone();
+            let _watcher = AbortOnDropHandle::new(tokio::spawn(async move {
+                let mut paths = conn.paths_stream();
+                let mut last = None;
+                while let Some(list) = paths.next().await {
+                    let relay = (&list)
+                        .into_iter()
+                        .find(|p| p.is_selected())
+                        .map(|p| p.is_relay());
+                    if relay.is_some() && relay != last {
+                        mp2.println(if relay == Some(true) {
+                            "connected via relay"
+                        } else {
+                            "connected directly"
+                        })
+                        .ok();
+                        last = relay;
+                    }
+                }
+            }));
             cp.finish_and_clear();
             let sp = mp.add(make_get_sizes_progress());
             let (_hash_seq, sizes) =

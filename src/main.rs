@@ -50,7 +50,8 @@ use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use tokio::{select, sync::mpsc};
 use tracing::{error, trace};
-use walkdir::WalkDir;
+
+mod sources;
 
 /// Send a file or directory between two machines, using blake3 verified streaming.
 ///
@@ -208,6 +209,11 @@ pub struct SendArgs {
     /// The last component of the path will be used as the name of the data
     /// being shared.
     pub path: PathBuf,
+
+    /// Disable .gitignore and .ignore filtering and include .git metadata.
+    /// Explicit file arguments are always sent, with or without this flag.
+    #[clap(long)]
+    pub no_ignore: bool,
 
     /// What type of ticket to use.
     ///
@@ -372,36 +378,17 @@ pub fn canonicalized_path_to_string(
 /// The returned tag always refers to a collection. If the input is a file, this
 /// is a collection with a single blob, named like the file.
 ///
-/// If the input is a directory, the collection contains all the files in the
-/// directory.
+/// If the input is a directory, the collection contains its selected files,
+/// respecting ignore rules when requested.
 async fn import(
     path: PathBuf,
     db: &Store,
     mp: &mut MultiProgress,
     jobs: Option<usize>,
+    respect_ignore: bool,
 ) -> anyhow::Result<(TempTag, u64, Collection)> {
     let parallelism = jobs.unwrap_or_else(num_cpus::get);
-    let path = path.canonicalize()?;
-    anyhow::ensure!(path.exists(), "path {} does not exist", path.display());
-    let root = path.parent().context("context get parent")?;
-    // walkdir also works for files, so we don't need to special case them
-    let files = WalkDir::new(path.clone()).into_iter();
-    // flatten the directory structure into a list of (name, path) pairs.
-    // ignore symlinks.
-    let data_sources: Vec<(String, PathBuf)> = files
-        .map(|entry| {
-            let entry = entry?;
-            if !entry.file_type().is_file() {
-                // Skip symlinks. Directories are handled by WalkDir.
-                return Ok(None);
-            }
-            let path = entry.into_path();
-            let relative = path.strip_prefix(root)?;
-            let name = canonicalized_path_to_string(relative, true)?;
-            anyhow::Ok(Some((name, path)))
-        })
-        .filter_map(Result::transpose)
-        .collect::<anyhow::Result<Vec<_>>>()?;
+    let data_sources = sources::collect_sources(&path, respect_ignore)?;
     // import all the files, using num_cpus workers, return names and temp tags
     let op = mp.add(make_import_overall_progress());
     op.set_message(format!("importing {} files", data_sources.len()));
@@ -723,7 +710,14 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
             )),
         );
 
-        let import_result = import(path2, blobs.store(), &mut mp, args.common.jobs).await?;
+        let import_result = import(
+            path2,
+            blobs.store(),
+            &mut mp,
+            args.common.jobs,
+            !args.no_ignore,
+        )
+        .await?;
         let dt = t0.elapsed();
 
         let router = iroh::protocol::Router::builder(endpoint)

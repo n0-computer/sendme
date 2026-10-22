@@ -53,6 +53,8 @@ fn send_recv_file() {
     let tgt_dir = tempfile::tempdir().unwrap();
     let src_file = src_dir.path().join(name);
     std::fs::write(&src_file, &data).unwrap();
+    // Explicit files still transfer even when directory filtering would omit them.
+    std::fs::write(src_dir.path().join(".gitignore"), "*.bin\n").unwrap();
     let mut send_cmd = duct::cmd(
         sendme_bin(),
         ["send", src_file.as_os_str().to_str().unwrap()],
@@ -174,6 +176,61 @@ fn send_recv_dir() {
                 let (name, data) = create_file(&tgt_data_dir, i, j, k);
                 let tgt_data = std::fs::read(&name).unwrap();
                 assert_eq!(tgt_data, data);
+            }
+        }
+    }
+}
+
+#[test]
+fn send_recv_ignore_modes() {
+    for no_ignore in [false, true] {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let root = src.path().join("project");
+        let fixtures = [
+            (".gitignore", "*.log\nbuild/*\n"),
+            (".ignore", "!keep.log\n!build/keep.txt\n"),
+            (".dockerignore", "*\n"), // Must not affect selection.
+            (".git/config", "repository metadata"),
+            ("secret.log", "must not arrive"),
+            ("keep.log", "generic override"),
+            ("build/drop.txt", "must not arrive"),
+            ("build/keep.txt", "generic exception"),
+            (".hidden", "hidden file"),
+        ];
+        for (name, contents) in fixtures {
+            let path = root.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        }
+        let mut args = vec!["send", root.to_str().unwrap(), "--relay", "disabled"];
+        if no_ignore {
+            args.push("--no-ignore");
+        }
+        let mut sender = duct::cmd(sendme_bin(), args)
+            .dir(src.path())
+            .env_remove("RUST_LOG")
+            .stderr_to_stdout()
+            .reader()
+            .unwrap();
+        let output = String::from_utf8(read_ascii_lines(3, &mut sender).unwrap()).unwrap();
+        let ticket = BlobTicket::from_str(output.split_ascii_whitespace().last().unwrap()).unwrap();
+        let receiver = duct::cmd(
+            sendme_bin(),
+            ["receive", &ticket.to_string(), "--relay", "disabled"],
+        )
+        .dir(dst.path())
+        .env_remove("RUST_LOG")
+        .stderr_to_stdout()
+        .run()
+        .unwrap();
+        assert!(receiver.status.success());
+        for (name, contents) in fixtures {
+            let target = dst.path().join("project").join(name);
+            if !no_ignore && [".git/config", "secret.log", "build/drop.txt"].contains(&name) {
+                assert!(!target.exists(), "unexpectedly received {name}");
+            } else {
+                assert_eq!(std::fs::read_to_string(target).unwrap(), contents);
             }
         }
     }

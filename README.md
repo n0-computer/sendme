@@ -48,6 +48,32 @@ will delete the temporary directory.
 This currently will create a temporary directory in the current directory. In
 the future this won't be needed anymore.
 
+### Ignore files
+
+By default, sendme respects ignore files when sending a directory. To include
+ignored files and `.git` metadata, use `--no-ignore`:
+
+```sh
+sendme send ./project             # Respect ignore files
+sendme send ./project --no-ignore # Send every regular file
+```
+
+Default filtering reads `.gitignore` and `.ignore` files within the selected
+directory and its descendants. No Git repository is required. `.ignore` rules
+override `.gitignore` rules; within each kind, rules closer to a file take
+precedence. Rules cannot rescue a file in an excluded directory.
+
+Default filtering also omits `.git` files and directories. Other hidden files and
+the ignore files themselves are sent unless excluded. An explicitly selected file
+is always sent, even if it would be ignored during directory traversal.
+
+Parent-directory rules, global Git configuration, `.git/info/exclude`, and
+`.dockerignore` files are not rule sources. This is file filtering, not an export
+of Git-tracked files. Missing ignore files are allowed; when filtering is enabled,
+invalid, unreadable, or non-regular ignore files cause an error, as does filtering
+out every file. `--no-ignore` skips reading ignore files entirely. Descendant
+symlinks are not followed, with or without `--no-ignore`.
+
 ### Receive side
 
 ```

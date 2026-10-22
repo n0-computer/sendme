@@ -568,6 +568,12 @@ async fn per_request_progress(
     while let Ok(Some(msg)) = rx.recv().await {
         match msg {
             RequestUpdate::Started(msg) => {
+                eprintln!(
+                    "transfer started: connection {connection_id} request {request_id} index {} hash {} size {}",
+                    msg.index,
+                    msg.hash.fmt_short(),
+                    msg.size
+                );
                 pb.set_message(format!(
                     "n {} r {}/{} i {} # {}",
                     endpoint_id,
@@ -582,11 +588,13 @@ async fn per_request_progress(
                 pb.set_position(msg.end_offset);
             }
             RequestUpdate::Completed(_) => {
+                eprintln!("transfer completed: connection {connection_id} request {request_id}");
                 if let Some(msg) = connections.lock().unwrap().get_mut(&connection_id) {
                     msg.requests.remove(&request_id);
                 };
             }
             RequestUpdate::Aborted(_) => {
+                eprintln!("transfer aborted: connection {connection_id} request {request_id}");
                 if let Some(msg) = connections.lock().unwrap().get_mut(&connection_id) {
                     msg.requests.remove(&request_id);
                 };

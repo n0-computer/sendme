@@ -178,3 +178,56 @@ fn send_recv_dir() {
         }
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn send_reports_completed_downloads() {
+    use std::{
+        io::{BufRead as _, BufReader, Read as _},
+        process::{Command, Stdio},
+    };
+
+    let name = "counted.bin";
+    let data = vec![0u8; 100];
+    let src_dir = tempfile::tempdir().unwrap();
+    let tgt_dir = tempfile::tempdir().unwrap();
+    let src_file = src_dir.path().join(name);
+    std::fs::write(&src_file, &data).unwrap();
+    let mut send_cmd = Command::new(sendme_bin())
+        .args(["send", src_file.as_os_str().to_str().unwrap()])
+        .current_dir(src_dir.path())
+        .env_remove("RUST_LOG") // disable tracing
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdout = BufReader::new(send_cmd.stdout.take().unwrap());
+    let mut header = String::new();
+    for _ in 0..3 {
+        header.clear();
+        stdout.read_line(&mut header).unwrap();
+    }
+    let ticket = header.split_ascii_whitespace().last().unwrap();
+    let receive_output = duct::cmd(sendme_bin(), ["receive", ticket])
+        .dir(tgt_dir.path())
+        .env_remove("RUST_LOG") // disable tracing
+        .stderr_to_stdout()
+        .run()
+        .unwrap();
+    assert!(receive_output.status.success());
+    // stop the sender gracefully (ctrl-c) so it prints its summary
+    let status = Command::new("kill")
+        .args(["-INT", &send_cmd.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let mut output = String::new();
+    stdout.read_to_string(&mut output).unwrap();
+    assert!(send_cmd.wait().unwrap().success());
+    // one `receive` issues two requests against the provider (hash seq + blob),
+    // so the sender should report two completed downloads
+    assert!(
+        output.contains("2 completed downloads"),
+        "sender never reported the completed downloads: {output}"
+    );
+}

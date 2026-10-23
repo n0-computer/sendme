@@ -6,7 +6,10 @@ use std::{
     net::{SocketAddrV4, SocketAddrV6},
     path::{Component, Path, PathBuf},
     str::FromStr,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 
@@ -541,6 +544,86 @@ async fn export(db: &Store, collection: Collection, mp: &mut MultiProgress) -> a
 struct PerConnectionProgress {
     endpoint_id: String,
     requests: BTreeMap<u64, ProgressBar>,
+    /// Number of requests received on this connection.
+    requests_started: u64,
+    /// Number of request outcomes (completed or aborted) collected so far.
+    outcomes_collected: u64,
+    /// Number of requests that completed successfully.
+    requests_succeeded: u64,
+    /// Whether the connection has been closed.
+    closed: bool,
+}
+
+/// Outcome of a single request, collected from `per_request_progress`.
+#[derive(Debug, Clone, Copy)]
+enum RequestOutcome {
+    Completed,
+    Aborted,
+}
+
+/// If the connection has closed and all its request outcomes have been
+/// collected, the transfer is done: count it when anything was actually
+/// transferred, and drop the connection state.
+///
+/// This handles both orderings of the connection-close event and the
+/// request outcomes, since `per_request_progress` runs on a detached task.
+fn try_finalize_connection(
+    mp: &MultiProgress,
+    connections: &Mutex<BTreeMap<u64, PerConnectionProgress>>,
+    completed: &AtomicU64,
+    completed_pb: &Mutex<Option<ProgressBar>>,
+    connection_id: u64,
+) {
+    let finalize = {
+        let mut connections = connections.lock().unwrap();
+        if connections.get(&connection_id).is_some_and(|connection| {
+            connection.closed && connection.outcomes_collected == connection.requests_started
+        }) {
+            connections
+                .remove(&connection_id)
+                .is_some_and(|connection| connection.requests_succeeded > 0)
+        } else {
+            false
+        }
+    };
+    if finalize {
+        let n = completed.fetch_add(1, Ordering::Relaxed) + 1;
+        let mut guard = completed_pb.lock().unwrap();
+        let pb = guard.get_or_insert_with(|| {
+            let pb = mp.add(ProgressBar::new_spinner());
+            pb.set_style(ProgressStyle::with_template("{msg}").unwrap());
+            pb
+        });
+        pb.set_message(format!(
+            "{n} Transfer{} Completed",
+            if n == 1 { "" } else { "s" }
+        ));
+        // force a draw so the line shows up even if this was the only update
+        pb.tick();
+    }
+}
+
+/// Records the outcome of a finished request on its connection and
+/// finalizes the transfer if this was the last outstanding event for it.
+#[allow(clippy::too_many_arguments)]
+fn record_request_outcome(
+    mp: &MultiProgress,
+    connections: &Mutex<BTreeMap<u64, PerConnectionProgress>>,
+    completed: &AtomicU64,
+    completed_pb: &Mutex<Option<ProgressBar>>,
+    connection_id: u64,
+    outcome: RequestOutcome,
+) {
+    {
+        let mut connections = connections.lock().unwrap();
+        if let Some(connection) = connections.get_mut(&connection_id) {
+            connection.outcomes_collected += 1;
+            if matches!(outcome, RequestOutcome::Completed) {
+                connection.requests_succeeded += 1;
+            }
+        }
+    }
+    try_finalize_connection(mp, connections, completed, completed_pb, connection_id);
 }
 
 async fn per_request_progress(
@@ -549,7 +632,7 @@ async fn per_request_progress(
     request_id: u64,
     connections: Arc<Mutex<BTreeMap<u64, PerConnectionProgress>>>,
     mut rx: irpc::channel::mpsc::Receiver<RequestUpdate>,
-) {
+) -> RequestOutcome {
     let pb = mp.add(ProgressBar::hidden());
     let endpoint_id = if let Some(connection) = connections.lock().unwrap().get_mut(&connection_id)
     {
@@ -557,7 +640,7 @@ async fn per_request_progress(
         connection.endpoint_id.clone()
     } else {
         error!("got request for unknown connection {connection_id}");
-        return;
+        return RequestOutcome::Aborted;
     };
     pb.set_style(
         ProgressStyle::with_template(
@@ -565,6 +648,7 @@ async fn per_request_progress(
         ).unwrap()
         .progress_chars("#>-"),
     );
+    let mut outcome = RequestOutcome::Aborted;
     while let Ok(Some(msg)) = rx.recv().await {
         match msg {
             RequestUpdate::Started(msg) => {
@@ -585,23 +669,28 @@ async fn per_request_progress(
                 if let Some(msg) = connections.lock().unwrap().get_mut(&connection_id) {
                     msg.requests.remove(&request_id);
                 };
+                outcome = RequestOutcome::Completed;
             }
             RequestUpdate::Aborted(_) => {
                 if let Some(msg) = connections.lock().unwrap().get_mut(&connection_id) {
                     msg.requests.remove(&request_id);
                 };
+                outcome = RequestOutcome::Aborted;
             }
         }
     }
     pb.finish_and_clear();
     mp.remove(&pb);
+    outcome
 }
 
 async fn show_provide_progress(
     mp: MultiProgress,
     mut recv: mpsc::Receiver<ProviderMessage>,
+    completed: Arc<AtomicU64>,
 ) -> anyhow::Result<()> {
     let connections = Arc::new(Mutex::new(BTreeMap::new()));
+    let completed_pb: Arc<Mutex<Option<ProgressBar>>> = Arc::new(Mutex::new(None));
     let mut tasks = FuturesUnordered::new();
     loop {
         tokio::select! {
@@ -621,31 +710,81 @@ async fn show_provide_progress(
                             PerConnectionProgress {
                                 requests: BTreeMap::new(),
                                 endpoint_id,
+                                requests_started: 0,
+                                outcomes_collected: 0,
+                                requests_succeeded: 0,
+                                closed: false,
                             },
                         );
                     }
                     ProviderMessage::ConnectionClosed(msg) => {
-                        if let Some(connection) = connections.lock().unwrap().remove(&msg.connection_id) {
-                            for pb in connection.requests.values() {
-                                pb.finish_and_clear();
-                                mp.remove(pb);
+                        let connection_id = msg.connection_id;
+                        {
+                            let mut connections = connections.lock().unwrap();
+                            if let Some(connection) = connections.get_mut(&connection_id) {
+                                for pb in connection.requests.values() {
+                                    pb.finish_and_clear();
+                                    mp.remove(pb);
+                                }
+                                connection.requests.clear();
+                                connection.closed = true;
                             }
                         }
+                        // the request outcomes might already all be collected,
+                        // in which case this completes the transfer
+                        try_finalize_connection(
+                            &mp,
+                            &connections,
+                            &completed,
+                            &completed_pb,
+                            connection_id,
+                        );
                     }
                     ProviderMessage::GetRequestReceivedNotify(msg) => {
                         let request_id = msg.request_id;
                         let connection_id = msg.connection_id;
+                        if let Some(connection) = connections.lock().unwrap().get_mut(&connection_id)
+                        {
+                            connection.requests_started += 1;
+                        }
                         let connections = connections.clone();
                         let mp = mp.clone();
-                        tasks.push(per_request_progress(mp, connection_id, request_id, connections, msg.rx));
+                        let rx = msg.rx;
+                        tasks.push(async move {
+                            let outcome =
+                                per_request_progress(mp, connection_id, request_id, connections, rx)
+                                    .await;
+                            (connection_id, outcome)
+                        });
                     }
                     _ => {}
                 }
             }
-            Some(_) = tasks.next(), if !tasks.is_empty() => {}
+            Some((connection_id, outcome)) = tasks.next(), if !tasks.is_empty() => {
+                // collect the outcome of each finished request; this completes
+                // the transfer if the connection has already been closed
+                record_request_outcome(
+                    &mp,
+                    &connections,
+                    &completed,
+                    &completed_pb,
+                    connection_id,
+                    outcome,
+                );
+            }
         }
     }
-    while tasks.next().await.is_some() {}
+    // drain the remaining request tasks, collecting their outcomes
+    while let Some((connection_id, outcome)) = tasks.next().await {
+        record_request_outcome(
+            &mp,
+            &connections,
+            &completed,
+            &completed_pb,
+            connection_id,
+            outcome,
+        );
+    }
     Ok(())
 }
 
@@ -695,9 +834,11 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     let path2 = path.clone();
     let blobs_data_dir2 = blobs_data_dir.clone();
     let (progress_tx, progress_rx) = mpsc::channel(32);
+    let completed = Arc::new(AtomicU64::new(0));
     let progress = AbortOnDropHandle::new(n0_future::task::spawn(show_provide_progress(
         mp2,
         progress_rx,
+        completed.clone(),
     )));
     let setup = async move {
         let t0 = Instant::now();
@@ -789,6 +930,14 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     drop(router);
     // await progress completion so the progress bar is cleared
     progress.await.ok();
+
+    let completed = completed.load(Ordering::Relaxed);
+    if completed > 0 {
+        println!(
+            "{completed} Transfer{} Completed",
+            if completed == 1 { "" } else { "s" }
+        );
+    }
 
     Ok(())
 }

@@ -509,7 +509,7 @@ async fn export(db: &Store, collection: Collection, mp: &mut MultiProgress) -> a
             .export_with_opts(ExportOptions {
                 hash: *hash,
                 target,
-                mode: ExportMode::Copy,
+                mode: ExportMode::TryReference,
             })
             .stream()
             .await;

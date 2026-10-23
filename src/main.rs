@@ -6,7 +6,10 @@ use std::{
     net::{SocketAddrV4, SocketAddrV6},
     path::{Component, Path, PathBuf},
     str::FromStr,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 
@@ -548,6 +551,8 @@ async fn per_request_progress(
     connection_id: u64,
     request_id: u64,
     connections: Arc<Mutex<BTreeMap<u64, PerConnectionProgress>>>,
+    completed: Arc<AtomicU64>,
+    completed_pb: Arc<Mutex<Option<ProgressBar>>>,
     mut rx: irpc::channel::mpsc::Receiver<RequestUpdate>,
 ) {
     let pb = mp.add(ProgressBar::hidden());
@@ -585,6 +590,19 @@ async fn per_request_progress(
                 if let Some(msg) = connections.lock().unwrap().get_mut(&connection_id) {
                     msg.requests.remove(&request_id);
                 };
+                let n = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                let mut guard = completed_pb.lock().unwrap();
+                let pb = guard.get_or_insert_with(|| {
+                    let pb = mp.add(ProgressBar::new_spinner());
+                    pb.set_style(ProgressStyle::with_template("{msg}").unwrap());
+                    pb
+                });
+                pb.set_message(format!(
+                    "{n} completed download{}",
+                    if n == 1 { "" } else { "s" }
+                ));
+                // force a draw so the line shows up even if this was the only update
+                pb.tick();
             }
             RequestUpdate::Aborted(_) => {
                 if let Some(msg) = connections.lock().unwrap().get_mut(&connection_id) {
@@ -600,8 +618,10 @@ async fn per_request_progress(
 async fn show_provide_progress(
     mp: MultiProgress,
     mut recv: mpsc::Receiver<ProviderMessage>,
+    completed: Arc<AtomicU64>,
 ) -> anyhow::Result<()> {
     let connections = Arc::new(Mutex::new(BTreeMap::new()));
+    let completed_pb: Arc<Mutex<Option<ProgressBar>>> = Arc::new(Mutex::new(None));
     let mut tasks = FuturesUnordered::new();
     loop {
         tokio::select! {
@@ -637,7 +657,17 @@ async fn show_provide_progress(
                         let connection_id = msg.connection_id;
                         let connections = connections.clone();
                         let mp = mp.clone();
-                        tasks.push(per_request_progress(mp, connection_id, request_id, connections, msg.rx));
+                        let completed = completed.clone();
+                        let completed_pb = completed_pb.clone();
+                        tasks.push(per_request_progress(
+                            mp,
+                            connection_id,
+                            request_id,
+                            connections,
+                            completed,
+                            completed_pb,
+                            msg.rx,
+                        ));
                     }
                     _ => {}
                 }
@@ -695,9 +725,11 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     let path2 = path.clone();
     let blobs_data_dir2 = blobs_data_dir.clone();
     let (progress_tx, progress_rx) = mpsc::channel(32);
+    let completed = Arc::new(AtomicU64::new(0));
     let progress = AbortOnDropHandle::new(n0_future::task::spawn(show_provide_progress(
         mp2,
         progress_rx,
+        completed.clone(),
     )));
     let setup = async move {
         let t0 = Instant::now();
@@ -789,6 +821,14 @@ async fn send(args: SendArgs) -> anyhow::Result<()> {
     drop(router);
     // await progress completion so the progress bar is cleared
     progress.await.ok();
+
+    let completed = completed.load(Ordering::Relaxed);
+    if completed > 0 {
+        println!(
+            "{completed} completed download{}",
+            if completed == 1 { "" } else { "s" }
+        );
+    }
 
     Ok(())
 }

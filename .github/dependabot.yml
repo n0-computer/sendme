@@ -12,18 +12,20 @@ updates:
           - "*"  # Group all Actions updates into a single pull request
     cooldown:
       default-days: 7
+    rebase-strategy: disabled
     schedule:
       interval: weekly
-      day: "thursday"
+      day: "saturday"
       time: "08:00"
       timezone: "America/New_York"
   - package-ecosystem: cargo
     directory: /
     cooldown:
       default-days: 7
+    rebase-strategy: disabled
     schedule:
       interval: weekly
-      day: "thursday"
+      day: "saturday"
       time: "08:00"
       timezone: "America/New_York"
     ignore:
